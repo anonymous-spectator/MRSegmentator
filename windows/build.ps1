@@ -18,6 +18,7 @@
     .\windows\build.ps1 -NoWeights
     .\windows\build.ps1 -OneFile
     .\windows\build.ps1 -OneFile -Icon my_logo.ico
+    .\windows\build.ps1 -Installer
 #>
 
 [CmdletBinding()]
@@ -42,6 +43,16 @@ param(
     # Also produce a distributable .zip.
     [switch]$Zip,
 
+    # Also build a real installer with Inno Setup: installs to a stable
+    # per-user location with a Desktop shortcut, so weights are unpacked once
+    # at install time rather than on every launch. Requires Inno Setup
+    # (https://jrsoftware.org/isdl.php) and is incompatible with -OneFile.
+    [switch]$Installer,
+
+    # Path to Inno Setup's ISCC.exe, if not in the default install location
+    # or on PATH.
+    [string]$Iscc = '',
+
     # Reuse an existing virtual environment instead of creating one.
     [string]$VenvPath = '',
 
@@ -57,6 +68,7 @@ Write-Host "  backend    : $Backend"
 Write-Host "  torch      : $(if ($Cuda) { 'CUDA' } else { 'CPU only' })"
 Write-Host "  layout     : $(if ($OneFile) { 'single .exe (weights embedded)' } else { 'folder (weights\ next to the .exe)' })"
 Write-Host "  icon       : $(if ($Icon) { $Icon } else { 'none' })"
+Write-Host "  installer  : $(if ($Installer) { 'yes (Inno Setup)' } else { 'no' })"
 
 if (-not $VenvPath) { $VenvPath = Join-Path $repo 'build\windows\venv' }
 
@@ -89,10 +101,12 @@ if ($Backend -eq 'nuitka') {
 if ($LASTEXITCODE -ne 0) { throw 'Installing the build backend failed' }
 
 $buildArgs = @((Join-Path $repo 'windows\build_windows_exe.py'), '--backend', $Backend)
-if ($NoWeights) { $buildArgs += '--no-weights' }
-if ($OneFile)   { $buildArgs += '--onefile' }
-if ($Icon)      { $buildArgs += @('--icon', $Icon) }
-if ($Zip)       { $buildArgs += '--zip' }
+if ($NoWeights)  { $buildArgs += '--no-weights' }
+if ($OneFile)    { $buildArgs += '--onefile' }
+if ($Icon)       { $buildArgs += @('--icon', $Icon) }
+if ($Zip)        { $buildArgs += '--zip' }
+if ($Installer)  { $buildArgs += '--installer' }
+if ($Iscc)       { $buildArgs += @('--iscc', $Iscc) }
 
 Write-Host "`n=== Building (this takes a while: 15-90 minutes)" -ForegroundColor Cyan
 & $venvPython @buildArgs

@@ -546,6 +546,52 @@ def make_archive(dist: Path, output_dir: Path, version: str) -> Path:
     return Path(archive)
 
 
+def find_iscc(override: Optional[Path]) -> Optional[Path]:
+    """Locate Inno Setup's command-line compiler, ISCC.exe."""
+    if override is not None:
+        return override if override.is_file() else None
+
+    candidates = [
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        / "Inno Setup 6"
+        / "ISCC.exe",
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Inno Setup 6" / "ISCC.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    found = shutil.which("ISCC.exe") or shutil.which("iscc")
+    return Path(found) if found else None
+
+
+def build_installer(dist: Path, output_dir: Path, version: str, iscc: Path) -> Path:
+    """Compile windows/installer.iss into a single installer .exe.
+
+    Installs the already-built folder distribution to a stable per-user
+    location with Desktop/Start Menu shortcuts, so the weights are only ever
+    unpacked once (at install time) rather than on every launch -- see the
+    "Installer" section of windows/README.md for why this exists alongside
+    --onefile rather than instead of it everywhere.
+    """
+    installer_dir = output_dir / "installer"
+    installer_dir.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        str(iscc),
+        f"/DMyAppVersion={version}",
+        f"/DSourceDir={dist}",
+        f"/O{installer_dir}",
+        str(WINDOWS_DIR / "installer.iss"),
+    ]
+    run(command)
+
+    candidates = list(installer_dir.glob(f"{PRODUCT_NAME}-Setup-*.exe"))
+    if not candidates:
+        raise SystemExit(f"Inno Setup did not produce an installer in {installer_dir}")
+    return candidates[0]
+
+
 def smoke_test(executable: Path) -> bool:
     """Run `--help` to confirm the binary starts and finds its dependencies."""
     info("Smoke test")
@@ -638,6 +684,22 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--zip", action="store_true", help="also produce a distributable .zip")
     parser.add_argument(
+        "--installer",
+        action="store_true",
+        help="also build a real installer (Inno Setup): installs to a stable "
+        "per-user location with a Desktop shortcut, so weights are unpacked "
+        "once at install time rather than on every launch. Requires Inno "
+        "Setup (https://jrsoftware.org/isdl.php) and a folder build -- "
+        "incompatible with --onefile, whose whole point this replaces",
+    )
+    parser.add_argument(
+        "--iscc",
+        type=Path,
+        default=None,
+        help="path to Inno Setup's ISCC.exe, if not in the default install "
+        "location or on PATH",
+    )
+    parser.add_argument(
         "--skip-compile",
         action="store_true",
         help="reuse an existing build; only redo weights and packaging",
@@ -649,6 +711,24 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     version = read_version()
+
+    if args.installer and args.onefile:
+        raise SystemExit(
+            "--installer builds an installer for the folder distribution and is "
+            "incompatible with --onefile: the installer already solves the "
+            "single-file-to-share problem without onefile's per-launch unpack "
+            "cost. Drop one or the other."
+        )
+
+    iscc: Optional[Path] = None
+    if args.installer:
+        iscc = find_iscc(args.iscc)
+        if iscc is None:
+            raise SystemExit(
+                "--installer requires Inno Setup's ISCC.exe, which was not found "
+                "in the default install location or on PATH. Install Inno Setup "
+                "(https://jrsoftware.org/isdl.php), or pass --iscc <path to ISCC.exe>."
+            )
 
     check_environment(args.backend)
 
@@ -729,6 +809,12 @@ def main() -> int:
         info("Packaging")
         archive = make_archive(dist, output_dir, version)
         print(f"  {archive}")
+
+    if args.installer:
+        assert iscc is not None  # checked at the top of main()
+        info("Building installer (Inno Setup)")
+        installer = build_installer(dist, output_dir, version, iscc)
+        print(f"  {installer}")
 
     info("Done")
     print(f"Distribution: {dist.resolve()}")

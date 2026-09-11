@@ -16,13 +16,16 @@ windows/
   mrseg_entry.py         the entry point that gets compiled
   frozen_support.py      runtime fixes that only apply to the frozen build
   mrseg_gui.py           the GUI shown on a no-argument (double-click) launch
+  installer.iss          Inno Setup script for --installer (optional)
 ```
 
 ## Quick start
 
 On a Windows machine with Python 3.10–3.13 and
 [Visual Studio Build Tools 2022](https://visualstudio.microsoft.com/downloads/)
-("Desktop development with C++") installed:
+("Desktop development with C++") installed (plus
+[Inno Setup](https://jrsoftware.org/isdl.php) if you'll use `-Installer` —
+see below):
 
 ```powershell
 git clone https://github.com/hhaentze/MRSegmentator
@@ -62,6 +65,14 @@ for what that actually costs before reaching for it:
 
 `-Icon` takes a `.ico` file and passes it straight to the compiler as the
 executable's icon — no default, no conversion; see [Icon](#icon) below.
+
+For a real installer instead (Desktop shortcut, no per-launch unpack cost
+on either backend, an uninstaller) — see
+[`--installer`](#--installer-a-real-installer-instead-of-onefile) below:
+
+```powershell
+.\windows\build.ps1 -Installer
+```
 
 ## Graphical interface
 
@@ -242,6 +253,10 @@ python windows\build_windows_exe.py [options]
   --icon PATH                      .ico file, passed straight to the compiler
                                     (no default, no conversion)
   --zip                            also produce a distributable archive
+  --installer                      also build an installer with Inno Setup
+                                    (incompatible with --onefile)
+  --iscc PATH                      path to Inno Setup's ISCC.exe, if not found
+                                    automatically
   --skip-compile                   re-package an existing build
   --jobs N                         parallel compile jobs (nuitka)
 ```
@@ -282,7 +297,33 @@ of them can cache it:
 
 If you'd rather not accept either onefile trade-off but still want a single
 file to hand someone, `--zip` (below) already gives you that for the default
-folder build, without any unpack cost at every launch.
+folder build, without any unpack cost at every launch -- or see `--installer`
+next for a real installer instead of a zip, which also avoids the per-launch
+unpack cost while still being one file to hand out.
+
+### `--installer`: a real installer instead of onefile
+
+`--installer` compiles `windows/installer.iss` with
+[Inno Setup](https://jrsoftware.org/isdl.php) into a single installer `.exe`
+that wraps the normal folder build. Requires Inno Setup's `ISCC.exe`
+compiler (a build-time tool only; end users need nothing extra) — found
+automatically in its default install location or on `PATH`, or point
+`--iscc` at it directly.
+
+This exists because neither onefile backend is actually free: Nuitka's is
+only fast after the *first* launch, and PyInstaller's re-unpacks every
+single time (see `--onefile` above). An installer sidesteps both --
+double-clicking it once extracts everything to a stable per-user location
+(`%LOCALAPPDATA%\Programs\MRSegmentator`, no admin/UAC prompt needed) and
+adds a Desktop shortcut; from then on `mrsegmentator.exe` is just a normal
+file on disk; launches are exactly as fast as the plain folder build,
+indefinitely, on any backend. `--installer` is incompatible with
+`--onefile` for that reason — the whole point of one replaces the other.
+
+The installer also gets an uninstaller and an Add/Remove Programs entry for
+free from Inno Setup. `AppId` in `installer.iss` is a fixed GUID, so
+installing a newer build over an older one upgrades it in place rather than
+creating a second entry.
 
 ## Icon
 
@@ -335,10 +376,18 @@ set MRSEG_FROZEN_DEBUG=1
 This prints which weights directory was chosen, whether the manifest was found,
 and every dynamic class lookup it resolves.
 
+For an `--installer` build, additionally run the installer `.exe` itself at
+least once: confirm it completes without a UAC prompt, that the Desktop
+shortcut appears and launches `mrsegmentator.exe` from
+`%LOCALAPPDATA%\Programs\MRSegmentator`, and that the uninstaller (from the
+Start Menu group or Add/Remove Programs) removes it cleanly.
+
 ## Known Windows issues
 
 * **Antivirus.** Freshly compiled binaries are routinely flagged. Signing the
-  executable is the only real fix for distribution at scale.
+  executable is the only real fix for distribution at scale. Installer
+  executables (Inno Setup's included) get flagged too, sometimes even more
+  readily since installers are also a common malware vector.
 * **`MAX_PATH`.** torch and nnU-Net produce deep paths. Enable long paths
   (`Computer\HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem\
   LongPathsEnabled = 1`) or build somewhere near the drive root.
