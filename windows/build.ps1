@@ -36,8 +36,8 @@ param(
     # See windows/README.md for the Nuitka-vs-PyInstaller tradeoff this makes.
     [switch]$OneFile,
 
-    # Path to a .ico file, passed straight to the compiler. No default, no
-    # conversion.
+    # Path to an icon image (.ico, .png, ...). Re-derived into a proper
+    # square, multi-resolution .ico before it reaches the compiler.
     [string]$Icon = '',
 
     # Also produce a distributable .zip.

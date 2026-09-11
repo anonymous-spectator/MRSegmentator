@@ -135,6 +135,22 @@ def info(message: str) -> None:
     print(f"\n=== {message}", flush=True)
 
 
+def _looks_like_conda(base_prefix: Path) -> bool:
+    """Heuristic: is the underlying interpreter a conda/miniforge/anaconda one?
+
+    ``sys.base_prefix`` (not ``sys.prefix``) is what points at a conda
+    install even when running inside a plain ``venv`` created *from* that
+    conda Python -- which is exactly the setup ``build.ps1 -Python <conda
+    python.exe>`` produces. ``conda-meta`` is conda's own package-database
+    directory and exists in every conda environment (base or not); the name
+    check is a fallback for layouts where it is missing.
+    """
+    name = str(base_prefix).lower()
+    return (base_prefix / "conda-meta").is_dir() or any(
+        marker in name for marker in ("conda", "miniforge", "anaconda")
+    )
+
+
 def package_available(name: str) -> bool:
     try:
         import importlib.util
@@ -178,6 +194,20 @@ def check_environment(backend: str) -> None:
             "WARNING: not running on Windows. The build will produce a binary "
             "for THIS platform; cross-compiling to Windows is not supported by "
             "either backend. Run this on a Windows machine.",
+            file=sys.stderr,
+        )
+
+    if _looks_like_conda(Path(sys.base_prefix)):
+        print(
+            "\nWARNING: building with a conda/miniforge/anaconda Python "
+            f"({sys.executable}). Both backends bundle whatever DLLs they find "
+            "next to that interpreter, and conda's own C runtime, MKL and "
+            "OpenMP DLLs routinely conflict in version/exports with the ones "
+            "pip-installed torch/numpy/scipy ship -- the usual symptom is the "
+            "built .exe failing to start with an 'ordinal ... not found in "
+            "DLL' error that never shows up in the build itself. Building "
+            "with an official python.org CPython 3.10-3.13 (e.g. `py -3.11`, "
+            "as build.ps1 defaults to) avoids this class of bug entirely.\n",
             file=sys.stderr,
         )
 
@@ -251,6 +281,54 @@ def write_manifest(modules: List[str], destination: Path) -> Path:
         "modules": modules,
     }
     destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return destination
+
+
+# ---------------------------------------------------------------------------
+# Icon
+# ---------------------------------------------------------------------------
+ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+
+
+def normalize_icon(icon: Path, destination: Path) -> Path:
+    """Re-derive ``icon`` into a proper, square, multi-resolution ``.ico``.
+
+    Handed straight to Pillow regardless of source format, ``.ico`` included:
+    a plain copy would trust the source file's own frames, and a single
+    non-square frame -- a common result of quick "convert my logo to .ico"
+    tools that resize instead of pad -- would carry that distortion straight
+    through and show up visibly stretched once Windows displays it in a
+    square icon slot. Padding onto a transparent square first avoids that
+    either way, whatever the source actually is.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from PIL import Image
+    except ImportError as error:
+        if icon.suffix.lower() == ".ico":
+            print(
+                f"  WARNING: Pillow not installed, copying {icon} as-is -- a "
+                f"non-square or single-resolution .ico will look stretched"
+            )
+            shutil.copy2(icon, destination)
+            return destination
+        raise SystemExit(
+            f"--icon {icon} is not a .ico file, and Pillow is not installed to "
+            f"convert it (it normally comes in already, as a matplotlib "
+            f"dependency). Either supply a real .ico, or run: pip install pillow"
+        ) from error
+
+    # Pillow's ICO reader opens the largest frame in the file by default, so
+    # re-deriving from an already-multi-resolution .ico loses nothing.
+    image = Image.open(icon).convert("RGBA")
+    if image.width != image.height:
+        size = max(image.width, image.height)
+        square = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        square.paste(image, ((size - image.width) // 2, (size - image.height) // 2), image)
+        image = square
+
+    image.save(destination, format="ICO", sizes=ICO_SIZES)
     return destination
 
 
@@ -686,8 +764,9 @@ def parse_args() -> argparse.Namespace:
         "--icon",
         type=Path,
         default=None,
-        help="path to a .ico file, passed straight to the compiler as the "
-        "executable's icon; no default, no conversion",
+        help="path to an image (.ico, .png, ...) used as the executable's "
+        "icon; re-derived through Pillow into a proper square, "
+        "multi-resolution .ico before it reaches the compiler",
     )
     parser.add_argument("--zip", action="store_true", help="also produce a distributable .zip")
     parser.add_argument(
@@ -751,7 +830,8 @@ def main() -> int:
     if args.icon:
         if not args.icon.is_file():
             raise SystemExit(f"--icon {args.icon} not found")
-        icon = args.icon
+        info(f"Normalizing icon: {args.icon}")
+        icon = normalize_icon(args.icon, output_dir / "generated" / "icon.ico")
 
     info("Recording nnU-Net's dynamically imported modules")
     manifest = write_manifest(collect_dynamic_modules(), output_dir / "generated" / MANIFEST_NAME)

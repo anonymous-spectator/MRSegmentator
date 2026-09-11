@@ -38,9 +38,8 @@ cd MRSegmentator
 
 That produces a per-user installer (Desktop shortcut, uninstaller) which
 downloads the model weights once, right after installation -- see
-[Installer & weights](#installer--weights) below. `-Icon` takes any `.ico`
-file and passes it straight to the compiler; build a proper multi-resolution
-(16/32/48/256px), square `.ico` first.
+[Installer & weights](#installer--weights) below. `-Icon` takes any image
+Pillow can read (`.ico`, `.png`, ...) -- see [Icon](#icon) below.
 
 Without `-Installer` you get a plain folder build in
 `build\windows\mrseg_entry.dist\`, weights included by default:
@@ -189,6 +188,24 @@ Freezing this application needed four fixes, all in `frozen_support.py`:
 Run with `MRSEG_FROZEN_DEBUG=1` set to see which weights directory, manifest
 and dynamic lookups this machinery actually used.
 
+## Icon
+
+`--icon PATH` (`-Icon PATH` in build.ps1) accepts any image Pillow can read
+-- a `.png`, `.jpg`, or `.ico` -- and always re-derives it into a proper
+square, multi-resolution `.ico` (16/24/32/48/64/128/256px) before handing it
+to the compiler. A non-square source is padded onto a transparent square
+rather than stretched, so a single hand-drawn square logo just works;
+quick "convert my logo to .ico" web tools are exactly what produces the
+distorted, single-resolution `.ico` this step exists to fix. Needs Pillow
+(already a transitive dependency via matplotlib); without it, a `.ico`
+input is copied through as-is (a warning is printed) and anything else
+fails outright.
+
+**Windows caches file icons.** If you rebuild with a different icon and
+Explorer still shows the old one on the `.exe`, that's the icon cache, not a
+build issue -- moving/renaming the file, or logging off and back on, forces
+a refresh.
+
 ## GPU or CPU
 
 The default build ships CPU-only torch (~2 GB + weights, runs anywhere).
@@ -224,6 +241,12 @@ everything.
   `--nproc 1 --nproc_export 2` is a good default on modest machines.
 * **Defender real-time scanning** roughly doubles Nuitka build times;
   excluding the build directory helps.
-* **Icon cache** -- if you rebuild with a different `--icon` and Explorer
-  still shows the old one, that's Explorer's icon cache, not a build issue;
-  moving/renaming the file or logging off and back on forces a refresh.
+* **Building with conda/miniforge/anaconda Python** is fragile: both
+  backends bundle whatever DLLs they find next to the interpreter used to
+  build, and conda's own C runtime/MKL/OpenMP DLLs routinely conflict in
+  version or exports with what pip-installed torch/numpy/scipy ship. The
+  symptom is the built `.exe` refusing to start with an *"ordinal ... not
+  found in DLL ..."* error that never shows up during the build itself.
+  `build_windows_exe.py` detects this and warns loudly; the fix is to build
+  with an official python.org CPython 3.10-3.13 instead (`py -3.11`, which
+  is `build.ps1`'s default -- don't pass `-Python` at a conda interpreter).
