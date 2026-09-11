@@ -33,6 +33,17 @@ them before ``mrsegmentator.main.main()`` is called.
    but note that spawned children re-enter that entry point, so the hook from
    (2) must be installed *before* ``freeze_support()`` runs -- nnU-Net's export
    workers resolve resampling functions in the child process.
+
+4. **Console vs. GUI.**  ``mrseg_entry.py`` opens ``mrseg_gui.py`` when the
+   executable is started with no arguments (an Explorer double-click), and
+   runs the normal CLI otherwise.  On the PyInstaller backend the exe is
+   built windowed (no console of its own), so double-clicking it shows only
+   the GUI window and nothing else; ``attach_console_if_present()`` below
+   reattaches stdout/stderr to the launching terminal's console when one
+   exists, so a terminal invocation still prints in place like a normal CLI
+   tool.  The Nuitka backend gets the same behaviour for free from
+   ``--windows-console-mode=attach``, before Python even starts, which makes
+   this a safe no-op there.
 """
 
 import importlib
@@ -62,7 +73,7 @@ _manifest_cache: Optional[List[str]] = None
 # Debug output (stderr, opt-in via MRSEG_FROZEN_DEBUG=1)
 # ---------------------------------------------------------------------------
 def _debug(message: str) -> None:
-    if os.environ.get(DEBUG_ENV_VAR):
+    if os.environ.get(DEBUG_ENV_VAR) and sys.stderr is not None:
         print(f"[mrseg-frozen] {message}", file=sys.stderr)
 
 
@@ -72,6 +83,53 @@ def _debug(message: str) -> None:
 def is_frozen() -> bool:
     """True when running from a Nuitka or PyInstaller build."""
     return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+
+
+def attach_console_if_present() -> None:
+    """Reattach stdio to the launching terminal's console, if there is one.
+
+    A windowed-subsystem executable (the PyInstaller backend's build) starts
+    with no console of its own -- exactly what a double-click should produce,
+    since only the GUI is meant to appear. When Windows could not give the
+    process a usable stdin/stdout/stderr at all (no console, nothing
+    redirected -- the double-click case, or certain shells that launch a
+    windowed subsystem exe without passing handles), CPython leaves the
+    corresponding ``sys.std*`` as ``None``. Only in that situation do we look
+    for a console-owning parent process, attach to it, and repoint the
+    missing streams there -- before anything else runs, since this has to
+    happen before argparse can print so much as ``--help``.
+
+    Deliberately does **not** touch a stream that is already usable: both a
+    real terminal invocation (Nuitka's ``--windows-console-mode=attach``
+    already resolved this at the C level before Python started, and most
+    shells hand a windowed exe working, inherited console handles anyway)
+    and a piped subprocess call (the build's own ``--help`` smoke test
+    captures stdout this way) must keep whatever valid stream they already
+    have -- reassigning it here would silently break output capture.
+    A no-op on non-Windows and on an unfrozen run, where this is never
+    exercised.
+    """
+    if os.name != "nt" or not is_frozen():
+        return
+    if sys.stdout is not None and sys.stderr is not None and sys.stdin is not None:
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        attach_parent_process = -1
+        if not kernel32.AttachConsole(attach_parent_process):
+            return
+
+        if sys.stdout is None:
+            sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+        if sys.stderr is None:
+            sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+        if sys.stdin is None:
+            sys.stdin = open("CONIN$", "r", encoding="utf-8", errors="replace")
+        _debug("attached to parent console")
+    except Exception as error:  # pragma: no cover - defensive
+        _debug(f"console attach skipped: {error}")
 
 
 def app_dir() -> Path:

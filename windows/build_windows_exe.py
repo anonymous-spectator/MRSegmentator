@@ -9,13 +9,14 @@ that the model weights travel with it, so the user never has to think about
 weight management or network access::
 
     MRSegmentator\\
-        mrsegmentator.exe        <- same CLI as `mrsegmentator`
+        mrsegmentator.exe        <- same CLI as `mrsegmentator`; a plain
+                                     double-click opens a simplified GUI
         dcm_helper.exe           <- same CLI as `dcm_helper`
         weights\\base\\ ...        <- shipped, no download at first run
         <runtime files>
 
 Nothing under src/ is touched.  The only extra code that ends up in the binary
-is windows/mrseg_entry.py and windows/frozen_support.py.
+is windows/mrseg_entry.py, windows/frozen_support.py and windows/mrseg_gui.py.
 
 Usage (on Windows, inside the environment that has MRSegmentator installed):
 
@@ -271,12 +272,16 @@ def nuitka_command(
         "nuitka",
         "--onefile" if onefile else "--standalone",
         "--assume-yes-for-downloads",
-        # A CLI tool: keep the console attached even when double-clicked.
-        "--windows-console-mode=force",
+        # Attach to the launching terminal's console when there is one (so a
+        # CLI invocation prints in place, as usual); stay windowed with no
+        # console of its own otherwise, so a double-click opens only the GUI.
+        "--windows-console-mode=attach",
         # nnU-Net spawns worker processes; the plugin makes the frozen binary
         # re-enter itself correctly on Windows.
         "--enable-plugin=multiprocessing",
         "--enable-plugin=torch",
+        # The GUI shown on a no-argument (double-click) launch is Tkinter.
+        "--enable-plugin=tk-inter",
         # Compiling all of torch with LTO costs hours for no runtime benefit.
         "--lto=no",
         "--noinclude-pytest-mode=nofollow",
@@ -324,7 +329,11 @@ def pyinstaller_command(
         "PyInstaller",
         "--noconfirm",
         "--clean",
-        "--console",
+        # Windowed subsystem: no console of its own, so a double-click opens
+        # only the GUI. frozen_support.attach_console_if_present() reattaches
+        # stdout/stderr to the launching terminal when the exe is run from one,
+        # so a CLI invocation still behaves like a normal console tool.
+        "--windowed",
         "--onefile" if onefile else "--onedir",
         f"--name={APP_NAME}",
         f"--distpath={output_dir / 'dist'}",
@@ -428,7 +437,12 @@ def write_readme(dist: Path, with_weights: bool, backend: str, version: str) -> 
 
 Usage
 -----
-Open a terminal (cmd or PowerShell) in this folder and run:
+Double-click mrsegmentator.exe for a simplified GUI: add one or more input
+files or folders, pick an output directory and a model (base or body
+composition), and click Run. GUI runs always use --fast --split_level 1.
+
+For the full command-line interface, open a terminal (cmd or PowerShell) in
+this folder and run it with arguments instead, e.g.:
 
     mrsegmentator.exe --input <file or directory> --outdir <output directory>
 

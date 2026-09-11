@@ -15,6 +15,7 @@ windows/
   fetch_weights.py       downloads, verifies and stages the weights
   mrseg_entry.py         the entry point that gets compiled
   frozen_support.py      runtime fixes that only apply to the frozen build
+  mrseg_gui.py           the GUI shown on a no-argument (double-click) launch
 ```
 
 ## Quick start
@@ -40,11 +41,48 @@ README.txt               end-user instructions
 <runtime DLLs and data>
 ```
 
-The end user unzips that folder and runs:
+The end user unzips that folder. Double-clicking `mrsegmentator.exe` opens a
+GUI (see below); from a terminal it behaves exactly like the pip installation:
 
 ```
 mrsegmentator.exe --input scan.nii.gz --outdir segmentations
 ```
+
+## Graphical interface
+
+Starting `mrsegmentator.exe` with **no arguments at all** — what a
+double-click in Explorer always does — opens a simplified GUI
+(`mrseg_gui.py`) instead of the CLI's usual "print `--help` and exit" for a
+bare invocation. Any real argument, from a terminal or a script, still takes
+the normal CLI path untouched; `dcm_helper.exe` is unaffected and stays
+CLI-only.
+
+The GUI itself never calls into inference code directly — each run is just
+the same CLI, invoked as a subprocess per selected input with a fixed
+`--fast --split_level 1`:
+
+* **Add files...** / **Add folder...** — one or more images, or a folder
+  (batched as a single run, same as `--input <dir>` on the CLI; a folder of
+  DICOM files works too, exactly as it does on the CLI).
+* **Output directory** — shared by all runs in the batch.
+* **Model** — Base (default) or Body composition, mirroring `--body_comp`.
+* **Run** processes the queued inputs one at a time and shows a log pane
+  with the CLI's own output, including tqdm progress lines; a percentage
+  parsed out of the current line drives the progress bar. **Cancel** stops
+  after the current file.
+
+Nothing under `src/` is touched by the GUI either, and it adds no new
+dependency: it's built entirely on `tkinter`, which ships with Python.
+
+### Console vs. GUI at the OS level
+
+A CLI tool and a windowed GUI normally need two different Windows
+"subsystems" — a console app always gets a console window (even when
+double-clicked), a windowed app never does (even run from a terminal, its
+output goes nowhere visible). One executable needs to behave like a console
+app from a terminal and like a windowed app from Explorer, which is what
+`--windows-console-mode=attach` (Nuitka) and the `--windowed` build +
+`frozen_support.attach_console_if_present()` (PyInstaller) below provide.
 
 ## Nuitka vs. PyInstaller
 
@@ -73,7 +111,7 @@ dominated by PyTorch, which is already compiled C++/CUDA.
 
 ## What actually needed solving
 
-Freezing this application is not just "point a compiler at `main.py`". Three
+Freezing this application is not just "point a compiler at `main.py`". Four
 things break, and `frozen_support.py` fixes each one at startup.
 
 ### 1. Weights
@@ -145,6 +183,18 @@ Subtle consequence: the workers re-enter the entry point, so the hook from (2)
 has to be installed *before* `freeze_support()`. nnU-Net's export workers
 resolve resampling functions in the child process, not the parent.
 
+### 4. Console vs. GUI dispatch
+
+`mrseg_entry.py` opens the GUI when started with no arguments and runs the
+CLI otherwise (see [Graphical interface](#graphical-interface) above). On the
+PyInstaller backend the exe is built `--windowed`, i.e. with no console of
+its own, so `frozen_support.attach_console_if_present()` reattaches
+stdout/stderr to the launching terminal's console when one exists — before
+anything prints, including argparse's own `--help` — so a terminal
+invocation still behaves like a normal CLI tool. It has to run before
+`bootstrap()`. On Nuitka this is a no-op: `--windows-console-mode=attach`
+already did the equivalent at the C level, before Python even started.
+
 ## Options
 
 ```
@@ -185,7 +235,9 @@ cd build\windows\mrseg_entry.dist
 ```
 
 The build script already runs the `--help` check and fails the build if the
-executable does not start.
+executable does not start. That only exercises the CLI path, though — also
+double-click `mrsegmentator.exe` in Explorer (or run it with no arguments
+from a terminal) at least once to confirm the GUI opens and a run completes.
 
 If something misbehaves at runtime, the frozen-build machinery explains itself:
 
