@@ -16,7 +16,6 @@ windows/
   mrseg_entry.py         the entry point that gets compiled
   frozen_support.py      runtime fixes that only apply to the frozen build
   mrseg_gui.py           the GUI shown on a no-argument (double-click) launch
-  icon.ico               default .exe / window icon (override with --icon)
 ```
 
 ## Quick start
@@ -35,12 +34,16 @@ The result lands in `build\windows\mrseg_entry.dist\`:
 
 ```
 mrsegmentator.exe        same CLI as the `mrsegmentator` console script
-dcm_helper.exe           same CLI as the `dcm_helper` console script
 weights\base\            shipped; nothing is downloaded at first run
 weights\body_comp\
 README.txt               end-user instructions
 <runtime DLLs and data>
 ```
+
+Only `mrsegmentator.exe` is built. `dicom_helper` (DICOM I/O) is still a
+normal bundled dependency, since `mrsegmentator.main` itself uses it when
+`--input` is a DICOM directory — this only means there is no separate
+`dcm_helper.exe` console-script entry point.
 
 The end user unzips that folder. Double-clicking `mrsegmentator.exe` opens a
 GUI (see below); from a terminal it behaves exactly like the pip installation:
@@ -49,17 +52,16 @@ GUI (see below); from a terminal it behaves exactly like the pip installation:
 mrsegmentator.exe --input scan.nii.gz --outdir segmentations
 ```
 
-For a single self-contained `.exe` instead (weights embedded, your own icon),
-add `-OneFile` and/or `-Icon` — see [`--onefile`](#--onefile-a-single-exe-with-the-weights-baked-in)
-and [Icon](#icon) below for what each actually costs/needs before reaching for them:
+For a single self-contained `.exe` instead (weights embedded), add `-OneFile`
+— see [`--onefile`](#--onefile-a-single-exe-with-the-weights-baked-in) below
+for what that actually costs before reaching for it:
 
 ```powershell
-.\windows\build.ps1 -OneFile -Icon path\to\your_logo.png
+.\windows\build.ps1 -OneFile -Icon path\to\your_logo.ico
 ```
 
-`-Icon` accepts a `.ico` directly, or any common raster image
-(`.png`/`.jpg`/`.bmp`/...) — it gets converted to a proper multi-resolution
-`.ico` automatically, so a hand-designed logo doesn't need pre-converting.
+`-Icon` takes a `.ico` file and passes it straight to the compiler as the
+executable's icon — no default, no conversion; see [Icon](#icon) below.
 
 ## Graphical interface
 
@@ -67,8 +69,7 @@ Starting `mrsegmentator.exe` with **no arguments at all** — what a
 double-click in Explorer always does — opens a simplified GUI
 (`mrseg_gui.py`) instead of the CLI's usual "print `--help` and exit" for a
 bare invocation. Any real argument, from a terminal or a script, still takes
-the normal CLI path untouched; `dcm_helper.exe` is unaffected and stays
-CLI-only.
+the normal CLI path untouched.
 
 The GUI itself never calls into inference code directly — each run is just
 the same CLI, invoked as a subprocess per selected input with a fixed
@@ -237,10 +238,9 @@ python windows\build_windows_exe.py [options]
   --onefile                        single, self-contained .exe (weights embedded)
                                     instead of a folder
   --no-weights                     do not ship weights
-  --no-dcm-helper                  only build mrsegmentator.exe, skip dcm_helper.exe
   --models base body_comp          which models to ship (default: both)
-  --icon PATH                      custom icon, .ico or any raster image (default:
-                                    windows/icon.ico; pass "" for no custom icon)
+  --icon PATH                      .ico file, passed straight to the compiler
+                                    (no default, no conversion)
   --zip                            also produce a distributable archive
   --skip-compile                   re-package an existing build
   --jobs N                         parallel compile jobs (nuitka)
@@ -280,48 +280,27 @@ of them can cache it:
   more to you than Nuitka's longer compile time, prefer the Nuitka backend
   for a onefile build.
 
-`add_second_entry_point()` hard-links `dcm_helper.exe` to `mrsegmentator.exe`
-rather than copying it, so the two file names don't double the on-disk size
-of a onefile build (they're the same bytes; hard links only cost extra space
-if you later zip the folder, since a zip has no concept of a hard link).
-
 If you'd rather not accept either onefile trade-off but still want a single
 file to hand someone, `--zip` (below) already gives you that for the default
 folder build, without any unpack cost at every launch.
 
 ## Icon
 
-`windows/icon.ico` (a simple blue-to-teal rounded badge with a brain glyph,
-in the same colors as the GUI's own header/badges) is used automatically --
-`--icon PATH` (`-Icon PATH` in build.ps1) overrides it, or an empty string
-(`--icon ""` / `-Icon ''`, the PowerShell default) builds without a custom
-icon. It sets the .exe's own file icon in both backends, and is separately
-bundled as a plain data file under the fixed name `icon.ico` so
-`mrseg_gui.py` can also set it as the actual window/taskbar icon at runtime
-(`frozen_support.find_data_file("icon.ico")`) -- Tk does not inherit the
-hosting .exe's icon on its own.
+`--icon PATH` (`-Icon PATH` in build.ps1) takes a `.ico` file and passes it
+straight to the compiler as the executable's icon
+(`--windows-icon-from-ico` for Nuitka, `--icon` for PyInstaller) -- no
+default, no conversion, no validation beyond checking the file exists. Build
+a proper `.ico` yourself (multi-resolution -- 16/32/48/256 px -- and square)
+before pointing `--icon` at it; passing something malformed is on you, not
+this script.
 
-Swap in your own design by pointing `--icon` at it: `stage_icon()` accepts a
-`.ico` or any other common raster format (`.png`, `.jpg`, `.bmp`, ...) --
-no pre-conversion needed for a hand-designed logo. Either way it is always
-re-derived through Pillow (already installed as a `matplotlib` dependency,
-so nothing extra to install in the usual case) and re-exported at a fixed
-set of sizes, `.ico` inputs included: a non-square *source* image gets
-padded onto a transparent square first rather than stretched to fit, and
-that matters for a `.ico` too -- a single non-square frame is a common
-result of quick "convert my logo to .ico" tools that resize instead of pad,
-and copying such a file as-is would carry the distortion straight through
-to a visibly stretched icon. (What re-deriving *can't* fix: a source image
-whose pixels are already distorted by an earlier lossy resize somewhere
-upstream -- start from an undistorted, ideally-square source for a clean
-result.) Not supported: vector formats like `.svg` (export a PNG from your
-design tool first).
+The GUI window itself does not set a custom icon at runtime (Tk's default);
+only the `.exe` file's own icon is affected by `--icon`.
 
 **Windows caches file icons.** If you rebuild with a different icon and
 Explorer still shows the old one on the `.exe`, that's the icon cache, not a
 build issue -- moving/renaming the file, or logging off and back on, forces
-a refresh. The window/taskbar icon the GUI itself sets at runtime is read
-fresh from the file on every launch and is not affected by this.
+a refresh.
 
 ## GPU or CPU
 

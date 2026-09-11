@@ -95,27 +95,6 @@ def _cli_command(args: List[str]) -> List[str]:
     return [sys.executable, str(ENTRY_SCRIPT), *args]
 
 
-def _apply_window_icon(root: tk.Tk) -> None:
-    """Set the window/taskbar icon from the bundled icon.ico, if there is one.
-
-    Tk does not inherit the hosting .exe's own icon automatically, so
-    windows-icon-from-ico (Nuitka) / --icon (PyInstaller) -- which only sets
-    the .exe's file icon in Explorer -- is not enough on its own; the build
-    also embeds the same file as an ordinary data file under the fixed name
-    "icon.ico" for this to find. A plain frozen_support import is cheap (no
-    torch/nnU-Net), so this does not slow down GUI startup. Best-effort: a
-    missing icon or a failure here should never stop the GUI from opening.
-    """
-    try:
-        import frozen_support
-
-        icon_path = frozen_support.find_data_file("icon.ico")
-        if icon_path is not None:
-            root.iconbitmap(str(icon_path))
-    except Exception:
-        pass
-
-
 def _display_name(path: str) -> str:
     p = Path(path)
     return p.name if p.name else path
@@ -203,7 +182,6 @@ class MRSegGUI:
         self.root = root
         self.root.title(PRODUCT_NAME)
         self.root.minsize(640, 640)
-        _apply_window_icon(root)
 
         self._jobs: List[_Job] = []
         self._queue: "queue.Queue[Tuple[str, object]]" = queue.Queue()

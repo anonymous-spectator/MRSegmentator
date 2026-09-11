@@ -11,7 +11,6 @@ weight management or network access::
     MRSegmentator\\
         mrsegmentator.exe        <- same CLI as `mrsegmentator`; a plain
                                      double-click opens a simplified GUI
-        dcm_helper.exe           <- same CLI as `dcm_helper`
         weights\\base\\ ...        <- shipped, no download at first run
         <runtime files>
 
@@ -57,8 +56,6 @@ BUILD_DIR = ROOT / "build" / "windows"
 APP_NAME = "mrsegmentator"
 PRODUCT_NAME = "MRSegmentator"
 COMPANY_NAME = "AIAH Lab"
-SECOND_EXE = "dcm_helper"
-DEFAULT_ICON = WINDOWS_DIR / "icon.ico"
 
 # ---------------------------------------------------------------------------
 # What has to go into the bundle
@@ -257,55 +254,6 @@ def write_manifest(modules: List[str], destination: Path) -> Path:
     return destination
 
 
-ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-
-
-def stage_icon(icon: Path, destination: Path) -> Path:
-    """Produce a proper multi-resolution ``.ico`` at a fixed filename, so
-    both backends embed it the same way regardless of the source file's own
-    name or format, and mrseg_gui.py can look it up at runtime with a name
-    it knows ahead of time (see frozen_support.find_data_file("icon.ico")).
-
-    ``icon`` can be a ``.ico`` or any image Pillow can read (``.png``,
-    ``.jpg``, ``.bmp``, ...) -- a hand-drawn logo does not need to be
-    pre-converted to design your own icon. Always re-derived through Pillow
-    and re-exported at a fixed set of sizes, ``.ico`` inputs included: a
-    plain copy would trust the source file's own frames, and a non-square
-    single-frame ``.ico`` (common output from quick online "convert to ico"
-    tools, which resize instead of padding) would carry that distortion
-    straight through and show up visibly stretched once Windows displays it
-    in a square icon slot. A non-square source is padded onto a transparent
-    square first instead, so nothing gets stretched either way.
-    """
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        from PIL import Image
-    except ImportError as error:
-        if icon.suffix.lower() == ".ico":
-            # No Pillow: fall back to a plain copy, trusting the source is
-            # already a well-formed, square, multi-resolution .ico.
-            shutil.copy2(icon, destination)
-            return destination
-        raise SystemExit(
-            f"--icon {icon} is not a .ico file, and Pillow is not installed to "
-            f"convert it (it normally comes in already, as a matplotlib "
-            f"dependency). Either supply a real .ico, or run: pip install pillow"
-        ) from error
-
-    # Pillow's ICO reader opens the largest frame in the file by default, so
-    # re-deriving from an already-multi-resolution .ico loses nothing.
-    image = Image.open(icon).convert("RGBA")
-    if image.width != image.height:
-        size = max(image.width, image.height)
-        square = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        square.paste(image, ((size - image.width) // 2, (size - image.height) // 2), image)
-        image = square
-
-    image.save(destination, format="ICO", sizes=ICO_SIZES)
-    return destination
-
-
 # ---------------------------------------------------------------------------
 # Backend command lines
 # ---------------------------------------------------------------------------
@@ -350,11 +298,6 @@ def nuitka_command(
 
     if icon is not None:
         command.append(f"--windows-icon-from-ico={icon}")
-        # Also embed it as an ordinary data file (not just the .exe's PE
-        # resource) so mrseg_gui.py can set it as the actual window/taskbar
-        # icon at runtime via frozen_support.find_data_file("icon.ico") --
-        # Tk does not inherit the hosting exe's own icon automatically.
-        command.append(f"--include-data-files={icon}=icon.ico")
 
     if jobs:
         command.append(f"--jobs={jobs}")
@@ -427,12 +370,6 @@ def pyinstaller_command(
 
     if icon is not None:
         command.append(f"--icon={icon}")
-        # --icon only sets the .exe's own PE resource icon; also bundle it
-        # as an ordinary data file so mrseg_gui.py can set the actual
-        # window/taskbar icon at runtime (see the matching comment in
-        # nuitka_command()). icon is already staged under the fixed name
-        # "icon.ico" by stage_icon(), so this lands at that same name.
-        command.append(f"--add-data={icon}{separator}.")
 
     if embedded_weights is not None:
         # See the matching comment in nuitka_command(): this bakes the
@@ -499,29 +436,6 @@ def executable_path(dist: Path) -> Path:
     raise SystemExit(f"No executable found in {dist}")
 
 
-def add_second_entry_point(dist: Path, executable: Path) -> Optional[Path]:
-    """Provide dcm_helper.exe as a hard link to the built binary.
-
-    mrseg_entry.py dispatches on the executable's file name, so one build
-    provides both console scripts of the pip installation -- a one-file
-    build is self-contained, so this works there as well.  A hard link
-    (same file, two directory entries) rather than a copy matters once
-    weights are embedded in a one-file build: a real copy would double the
-    multi-GB payload on disk for no reason.  Falls back to a copy if hard
-    links are not available (e.g. across filesystems, or unsupported).
-    """
-    target = dist / (SECOND_EXE + executable.suffix)
-    if target.exists():
-        target.unlink()
-    try:
-        os.link(executable, target)
-    except OSError as error:
-        print(f"  hard link failed ({error}), copying instead")
-        shutil.copy2(executable, target)
-    print(f"  added {target.name}")
-    return target
-
-
 def copy_weights(dist: Path, staged_weights: Path) -> None:
     target = dist / "weights"
     if target.exists():
@@ -540,7 +454,6 @@ def write_readme(
     backend: str,
     version: str,
     onefile: bool,
-    with_dcm_helper: bool,
 ) -> None:
     if not with_weights:
         weights_note = (
@@ -580,13 +493,6 @@ def write_readme(
         else "* Keep the whole folder together; the .exe needs the files next to it."
     )
 
-    dcm_helper_note = (
-        "DICOM conversion helper (same CLI as the `dcm_helper` console script):\n\n"
-        "    dcm_helper.exe --help\n\n"
-        if with_dcm_helper
-        else ""
-    )
-
     (dist / "README.txt").write_text(
         f"""{PRODUCT_NAME} {version} - Windows build ({backend})
 
@@ -605,7 +511,7 @@ All options of the pip installation are available:
 
     mrsegmentator.exe --help
 
-{dcm_helper_note}Weights
+Weights
 -------
 {weights_note}
 
@@ -709,12 +615,6 @@ def parse_args() -> argparse.Namespace:
         help="do not ship weights; fall back to downloading at first run",
     )
     parser.add_argument(
-        "--no-dcm-helper",
-        dest="with_dcm_helper",
-        action="store_false",
-        help="only build mrsegmentator.exe; skip the dcm_helper.exe hard link",
-    )
-    parser.add_argument(
         "--models",
         nargs="+",
         default=sorted(registry),
@@ -732,10 +632,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--icon",
         type=Path,
-        default=DEFAULT_ICON if DEFAULT_ICON.is_file() else None,
-        help="custom icon for the executable: a .ico, or any raster image "
-        "(.png/.jpg/.bmp/...) auto-converted to one (default: windows/icon.ico); "
-        "pass an empty string to build without a custom icon",
+        default=None,
+        help="path to a .ico file, passed straight to the compiler as the "
+        "executable's icon; no default, no conversion",
     )
     parser.add_argument("--zip", action="store_true", help="also produce a distributable .zip")
     parser.add_argument(
@@ -757,11 +656,10 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     icon: Optional[Path] = None
-    if args.icon and str(args.icon):
-        if Path(args.icon).is_file():
-            icon = stage_icon(Path(args.icon), output_dir / "generated" / "icon.ico")
-        else:
-            print(f"WARNING: --icon {args.icon} not found, building without a custom icon")
+    if args.icon:
+        if not args.icon.is_file():
+            raise SystemExit(f"--icon {args.icon} not found")
+        icon = args.icon
 
     info("Recording nnU-Net's dynamically imported modules")
     manifest = write_manifest(collect_dynamic_modules(), output_dir / "generated" / MANIFEST_NAME)
@@ -812,9 +710,6 @@ def main() -> int:
     executable = executable_path(dist)
     print(f"  executable: {executable}")
 
-    if args.with_dcm_helper:
-        add_second_entry_point(dist, executable)
-
     if staged_weights is not None and embedded_weights is None:
         copy_weights(dist, staged_weights)
 
@@ -824,7 +719,6 @@ def main() -> int:
         args.backend,
         version,
         args.onefile,
-        args.with_dcm_helper,
     )
 
     ok = True
