@@ -16,6 +16,7 @@ windows/
   mrseg_entry.py         the entry point that gets compiled
   frozen_support.py      runtime fixes that only apply to the frozen build
   mrseg_gui.py           the GUI shown on a no-argument (double-click) launch
+  icon.ico               default .exe / window icon (override with --icon)
 ```
 
 ## Quick start
@@ -221,9 +222,12 @@ already did the equivalent at the C level, before Python even started.
 python windows\build_windows_exe.py [options]
 
   --backend {nuitka,pyinstaller}   compiler (default: nuitka)
-  --onefile                        single .exe instead of a folder
+  --onefile                        single, self-contained .exe (weights embedded)
+                                    instead of a folder
   --no-weights                     do not ship weights
   --models base body_comp          which models to ship (default: both)
+  --icon PATH                      custom .ico (default: windows/icon.ico;
+                                    pass "" to build without a custom icon)
   --zip                            also produce a distributable archive
   --skip-compile                   re-package an existing build
   --jobs N                         parallel compile jobs (nuitka)
@@ -232,9 +236,52 @@ python windows\build_windows_exe.py [options]
 Weight archives are cached in `%TEMP%\mrseg_weight_cache` between builds, and
 staged weights are reused, so re-running the build does not re-download 2 GB.
 
-`--onefile` is supported but not recommended: the runtime unpacks several GB to
-a temporary directory on *every* launch. The folder build starts faster and is
-just as easy to distribute as a zip.
+### `--onefile`: a single .exe with the weights baked in
+
+Without `--onefile` the weights ship as a `weights\` folder next to the .exe
+(the default, and what the rest of this doc assumes). With it, the weights
+are embedded directly in the compiled binary via `--include-data-dir`
+(Nuitka) / `--add-data` (PyInstaller) — `frozen_support.bundled_weights_dir()`
+already searches the onefile unpack location first, so no runtime code needed
+to change for this to work. The result really is one file: sharing it is
+copying that one `.exe` (a few GB, dominated by the weights), nothing else.
+
+The two backends differ in what "unpack" costs at run time, because only one
+of them can cache it:
+
+* **Nuitka** sets `--onefile-tempdir-spec` to a stable, version-keyed cache
+  directory (no `{PID}`/`{TIME}` in it) instead of Nuitka's own default of a
+  fresh temp dir per run. Nuitka reuses that cache and skips re-extracting
+  when it's already there and matches this build, so only the *first* launch
+  after installing (or after updating to a new version) pays the unpack cost;
+  every launch after that starts close to instantly.
+* **PyInstaller** has no equivalent option: its onefile bootstrap always
+  extracts to a fresh temp directory and deletes it on exit, so **every
+  single launch** re-unpacks the whole multi-GB payload before the window
+  even appears. Bearable for a small onefile app; a real, repeated cost once
+  weights are embedded. If that matters more to you than Nuitka's longer
+  compile time, prefer the Nuitka backend for a onefile build.
+
+`add_second_entry_point()` hard-links `dcm_helper.exe` to `mrsegmentator.exe`
+rather than copying it, so the two file names don't double the on-disk size
+of a onefile build (they're the same bytes; hard links only cost extra space
+if you later zip the folder, since a zip has no concept of a hard link).
+
+If you'd rather not accept either onefile trade-off but still want a single
+file to hand someone, `--zip` (below) already gives you that for the default
+folder build, without any unpack cost at every launch.
+
+## Icon
+
+`windows/icon.ico` (a simple blue-to-teal rounded badge with a brain glyph,
+in the same colors as the GUI's own header/badges) is used automatically --
+`--icon` overrides it, or `--icon ""` builds without a custom icon. It sets
+the .exe's own file icon in both backends, and is separately bundled as a
+plain data file under the fixed name `icon.ico` so `mrseg_gui.py` can also
+set it as the actual window/taskbar icon at runtime
+(`frozen_support.find_data_file("icon.ico")`) -- Tk does not inherit the
+hosting .exe's icon on its own. Swap in your own design by pointing `--icon`
+at any `.ico` file (multi-resolution, e.g. 16/32/48/256 px, recommended).
 
 ## GPU or CPU
 
@@ -280,3 +327,12 @@ and every dynamic class lookup it resolves.
   `--nproc 1 --nproc_export 2` is a good default on modest machines.
 * **Defender real-time scanning** roughly doubles Nuitka build times. Excluding
   the build directory helps.
+* **"Matplotlib is building the font cache"** on the very first run ever
+  (nnU-Net pulls in matplotlib transitively). A few hundred ms to a couple of
+  seconds, and matplotlib caches the result in `%LOCALAPPDATA%\matplotlib`
+  itself after that -- every run after the first is unaffected, no code here
+  needed to change. Pre-building the cache at compile time and shipping it
+  would need its own writable, version-matched cache directory (the same
+  class of problem the weights and the onefile temp dir already solve), for
+  a one-time saving of at most a couple of seconds -- not worth the added
+  moving parts.

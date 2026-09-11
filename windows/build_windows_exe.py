@@ -58,6 +58,7 @@ APP_NAME = "mrsegmentator"
 PRODUCT_NAME = "MRSegmentator"
 COMPANY_NAME = "AIAH Lab"
 SECOND_EXE = "dcm_helper"
+DEFAULT_ICON = WINDOWS_DIR / "icon.ico"
 
 # ---------------------------------------------------------------------------
 # What has to go into the bundle
@@ -256,6 +257,16 @@ def write_manifest(modules: List[str], destination: Path) -> Path:
     return destination
 
 
+def stage_icon(icon: Path, destination: Path) -> Path:
+    """Copy ``icon`` to a fixed filename so both backends embed it the same
+    way regardless of the source file's own name, and mrseg_gui.py can look
+    it up at runtime with a name it knows ahead of time (see
+    frozen_support.find_data_file("icon.ico"))."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(icon, destination)
+    return destination
+
+
 # ---------------------------------------------------------------------------
 # Backend command lines
 # ---------------------------------------------------------------------------
@@ -265,6 +276,8 @@ def nuitka_command(
     onefile: bool,
     jobs: Optional[int],
     version: str,
+    embedded_weights: Optional[Path] = None,
+    icon: Optional[Path] = None,
 ) -> List[str]:
     command = [
         sys.executable,
@@ -296,6 +309,14 @@ def nuitka_command(
         f"--file-description={PRODUCT_NAME} - Multi-Modality Segmentation of 40+10 Classes",
     ]
 
+    if icon is not None:
+        command.append(f"--windows-icon-from-ico={icon}")
+        # Also embed it as an ordinary data file (not just the .exe's PE
+        # resource) so mrseg_gui.py can set it as the actual window/taskbar
+        # icon at runtime via frozen_support.find_data_file("icon.ico") --
+        # Tk does not inherit the hosting exe's own icon automatically.
+        command.append(f"--include-data-files={icon}=icon.ico")
+
     if jobs:
         command.append(f"--jobs={jobs}")
 
@@ -311,6 +332,26 @@ def nuitka_command(
         command.append(f"--include-module={name}")
 
     command.append(f"--include-data-files={manifest}={MANIFEST_NAME}")
+
+    if embedded_weights is not None:
+        # Bakes the weights into the single .exe payload instead of shipping
+        # them as a sibling folder. frozen_support.bundled_weights_dir()
+        # already searches the onefile unpack location (sys._MEIPASS is
+        # checked first by _data_dir_candidates()), so no runtime code needs
+        # to change for this to be picked up.
+        command.append(f"--include-data-dir={embedded_weights}=weights")
+        # Without this, Nuitka's onefile bootstrap extracts the whole
+        # multi-GB payload to a fresh temp dir on *every* launch and deletes
+        # it on exit. A stable spec (no {PID}/{TIME}) makes Nuitka reuse the
+        # same cache directory and skip re-extraction once it is already
+        # there and matches this build -- so only the first run after
+        # installing (or updating to a new version) pays the unpack cost.
+        # {CACHE_DIR}/{COMPANY}/{PRODUCT}/{VERSION} are Nuitka's own runtime
+        # placeholders (filled in from --company-name/--product-name/
+        # --product-version, all already passed above), not Python f-string
+        # substitution.
+        command.append("--onefile-tempdir-spec={CACHE_DIR}/{COMPANY}/{PRODUCT}/onefile_{VERSION}")
+
     command.append(str(ENTRY_SCRIPT))
     return command
 
@@ -320,6 +361,8 @@ def pyinstaller_command(
     output_dir: Path,
     onefile: bool,
     version: str,
+    embedded_weights: Optional[Path] = None,
+    icon: Optional[Path] = None,
 ) -> List[str]:
     separator = ";" if os.name == "nt" else ":"
 
@@ -342,6 +385,26 @@ def pyinstaller_command(
         f"--paths={WINDOWS_DIR}",
         f"--add-data={manifest}{separator}.",
     ]
+
+    if icon is not None:
+        command.append(f"--icon={icon}")
+        # --icon only sets the .exe's own PE resource icon; also bundle it
+        # as an ordinary data file so mrseg_gui.py can set the actual
+        # window/taskbar icon at runtime (see the matching comment in
+        # nuitka_command()). icon is already staged under the fixed name
+        # "icon.ico" by stage_icon(), so this lands at that same name.
+        command.append(f"--add-data={icon}{separator}.")
+
+    if embedded_weights is not None:
+        # See the matching comment in nuitka_command(): this bakes the
+        # weights into the single .exe; frozen_support.py finds them via
+        # sys._MEIPASS without any runtime code change. Unlike Nuitka,
+        # PyInstaller's onefile bootstrap has no persistent-cache option: it
+        # re-extracts the whole payload to a fresh temp dir on *every*
+        # launch and deletes it on exit, so every run pays the unpack cost
+        # for however large the weights are. Prefer the Nuitka backend for a
+        # single .exe if that matters more than compile time.
+        command.append(f"--add-data={embedded_weights}{separator}weights")
 
     for name in force_include_packages():
         command.append(f"--collect-all={name}")
@@ -398,14 +461,24 @@ def executable_path(dist: Path) -> Path:
 
 
 def add_second_entry_point(dist: Path, executable: Path) -> Optional[Path]:
-    """Copy the binary to dcm_helper.exe.
+    """Provide dcm_helper.exe as a hard link to the built binary.
 
     mrseg_entry.py dispatches on the executable's file name, so one build
-    provides both console scripts of the pip installation.  A one-file build is
-    self-contained, so the copy works there as well.
+    provides both console scripts of the pip installation -- a one-file
+    build is self-contained, so this works there as well.  A hard link
+    (same file, two directory entries) rather than a copy matters once
+    weights are embedded in a one-file build: a real copy would double the
+    multi-GB payload on disk for no reason.  Falls back to a copy if hard
+    links are not available (e.g. across filesystems, or unsupported).
     """
     target = dist / (SECOND_EXE + executable.suffix)
-    shutil.copy2(executable, target)
+    if target.exists():
+        target.unlink()
+    try:
+        os.link(executable, target)
+    except OSError as error:
+        print(f"  hard link failed ({error}), copying instead")
+        shutil.copy2(executable, target)
     print(f"  added {target.name}")
     return target
 
@@ -422,14 +495,45 @@ def copy_weights(dist: Path, staged_weights: Path) -> None:
     print(f"  weights: {size / 2**30:.2f} GiB")
 
 
-def write_readme(dist: Path, with_weights: bool, backend: str, version: str) -> None:
-    weights_note = (
-        "Model weights are included in the weights\\ folder next to the "
-        "executable.\nNothing is downloaded, and no internet connection is "
-        "needed."
-        if with_weights
-        else "Model weights are NOT included. On first use they are downloaded\n"
-        "to %USERPROFILE%\\.mrsegmentator (about 2 GB, internet required)."
+def write_readme(
+    dist: Path, with_weights: bool, backend: str, version: str, onefile: bool
+) -> None:
+    if not with_weights:
+        weights_note = (
+            "Model weights are NOT included. On first use they are downloaded\n"
+            "to %USERPROFILE%\\.mrsegmentator (about 2 GB, internet required)."
+        )
+    elif onefile:
+        weights_note = (
+            "Model weights are embedded directly in mrsegmentator.exe -- there is\n"
+            "no separate weights folder, nothing is downloaded, and no internet\n"
+            "connection is needed."
+        )
+        if backend == "nuitka":
+            weights_note += (
+                "\nThe first launch (or the first after updating to a new version)\n"
+                "unpacks the embedded weights to a per-user cache and takes a bit\n"
+                "longer; every launch after that reuses the cache and starts normally."
+            )
+        else:
+            weights_note += (
+                "\nBecause this is a PyInstaller build, every single launch re-unpacks\n"
+                "the embedded weights to a temporary folder and deletes it again on\n"
+                "exit -- expect a real delay (disk-speed dependent) before the window\n"
+                "appears on every run, not just the first. A Nuitka build avoids this\n"
+                "by reusing its unpacked cache between runs."
+            )
+    else:
+        weights_note = (
+            "Model weights are included in the weights\\ folder next to the "
+            "executable.\nNothing is downloaded, and no internet connection is "
+            "needed."
+        )
+
+    folder_note = (
+        "* mrsegmentator.exe is fully self-contained -- copy or share just that one file."
+        if onefile
+        else "* Keep the whole folder together; the .exe needs the files next to it."
     )
 
     (dist / "README.txt").write_text(
@@ -466,7 +570,7 @@ running, exactly as with the pip installation:
 
 Notes
 -----
-* Keep the whole folder together; the .exe needs the files next to it.
+{folder_note}
 * Without a CUDA GPU the segmentation runs on CPU. It works, but is slow.
   Use --fast, or --fold 0, to trade some accuracy for speed.
 * Each worker process loads its own copy of PyTorch on Windows. If memory is
@@ -547,8 +651,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--onefile",
         action="store_true",
-        help="produce a single .exe instead of a folder (slower startup, and "
-        "weights are then kept next to the .exe rather than inside it)",
+        help="produce a single self-contained .exe (weights embedded, nothing "
+        "else to ship) instead of a folder; Nuitka caches its one-time unpack "
+        "between runs, PyInstaller re-unpacks on every launch -- see windows/README.md",
     )
     parser.add_argument(
         "--no-weights",
@@ -571,6 +676,13 @@ def parse_args() -> argparse.Namespace:
         help="where downloaded weight archives are cached between builds",
     )
     parser.add_argument("--jobs", type=int, default=None, help="parallel compile jobs (nuitka)")
+    parser.add_argument(
+        "--icon",
+        type=Path,
+        default=DEFAULT_ICON if DEFAULT_ICON.is_file() else None,
+        help="custom .ico for the executable (default: windows/icon.ico); "
+        "pass an empty string to build without a custom icon",
+    )
     parser.add_argument("--zip", action="store_true", help="also produce a distributable .zip")
     parser.add_argument(
         "--skip-compile",
@@ -590,6 +702,13 @@ def main() -> int:
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    icon: Optional[Path] = None
+    if args.icon and str(args.icon):
+        if Path(args.icon).is_file():
+            icon = stage_icon(Path(args.icon), output_dir / "generated" / "icon.ico")
+        else:
+            print(f"WARNING: --icon {args.icon} not found, building without a custom icon")
+
     info("Recording nnU-Net's dynamically imported modules")
     manifest = write_manifest(collect_dynamic_modules(), output_dir / "generated" / MANIFEST_NAME)
 
@@ -600,14 +719,23 @@ def main() -> int:
             output_dir / "weights_staging", list(args.models), args.weights_cache
         )
 
+    # Only a one-file build embeds the weights in the executable itself; a
+    # folder build keeps shipping them as a sibling weights/ directory
+    # (copy_weights(), below), same as before.
+    embedded_weights = staged_weights if args.onefile else None
+
     if args.skip_compile:
         info("Skipping compilation (--skip-compile)")
     else:
         info(f"Compiling with {args.backend} (expect 15-90 minutes)")
         if args.backend == "nuitka":
-            command = nuitka_command(manifest, output_dir, args.onefile, args.jobs, version)
+            command = nuitka_command(
+                manifest, output_dir, args.onefile, args.jobs, version, embedded_weights, icon
+            )
         else:
-            command = pyinstaller_command(manifest, output_dir, args.onefile, version)
+            command = pyinstaller_command(
+                manifest, output_dir, args.onefile, version, embedded_weights, icon
+            )
         run(command)
 
     info("Assembling distribution")
@@ -617,10 +745,10 @@ def main() -> int:
 
     add_second_entry_point(dist, executable)
 
-    if staged_weights is not None:
+    if staged_weights is not None and embedded_weights is None:
         copy_weights(dist, staged_weights)
 
-    write_readme(dist, staged_weights is not None, args.backend, version)
+    write_readme(dist, staged_weights is not None, args.backend, version, args.onefile)
 
     ok = True
     if not args.skip_smoke_test:
