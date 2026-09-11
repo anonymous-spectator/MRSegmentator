@@ -21,6 +21,10 @@ Running it out-of-process rather than importing ``mrsegmentator.main``
 directly keeps this file lightweight (no torch/nnU-Net import here, so the
 window opens instantly) and lets the log pane simply show whatever the CLI
 itself prints, tqdm bars included.
+
+The header at the top is purely informational: the project name, a note that
+this simplified GUI runs a CPU-friendly light mode, and clickable links to
+the codebase and the two papers.
 """
 
 import os
@@ -30,8 +34,9 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import webbrowser
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import List, Optional, Tuple
 
@@ -43,6 +48,23 @@ PERCENT_RE = re.compile(r"(\d{1,3})\s*%")
 
 # Cap the log pane so a very long, very chatty run cannot grow it forever.
 MAX_LOG_LINES = 4000
+
+# Shown in the header; kept small and non-technical since this is the
+# simplified GUI, not the CLI.
+PRODUCT_NAME = "MRSegmentator"
+SUBTITLE = "Multi-Modality Segmentation of 40+10 Classes"
+LIGHT_MODE_NOTE = (
+    "⚡ CPU-friendly light mode: single fold, fast settings for quick results."
+)
+LINKS: List[Tuple[str, str]] = [
+    ("Codebase", "https://github.com/hhaentze/MRSegmentator"),
+    ("Main Paper", "https://pubs.rsna.org/doi/abs/10.1148/ryai.240777"),
+    ("Bodycomp Paper", "https://www.nature.com/articles/s43856-026-01888-w"),
+]
+LINK_COLOR = "#1a73e8"
+LINK_HOVER_COLOR = "#0b3d91"
+MUTED_COLOR = "#666666"
+SEPARATOR_COLOR = "#aaaaaa"
 
 
 def _is_frozen() -> bool:
@@ -71,6 +93,18 @@ def _display_name(path: str) -> str:
     return p.name if p.name else path
 
 
+def _make_link(parent: tk.Widget, text: str, url: str) -> ttk.Label:
+    """A clickable, underlined label that opens ``url`` in the default browser."""
+    label = ttk.Label(parent, text=text, foreground=LINK_COLOR, cursor="hand2")
+    underline_font = tkfont.Font(font=label.cget("font"))
+    underline_font.configure(underline=True)
+    label.configure(font=underline_font)
+    label.bind("<Button-1>", lambda _event: webbrowser.open(url))
+    label.bind("<Enter>", lambda _event: label.configure(foreground=LINK_HOVER_COLOR))
+    label.bind("<Leave>", lambda _event: label.configure(foreground=LINK_COLOR))
+    return label
+
+
 class _Job:
     """One queued input path (a file, a NIfTI directory, or a DICOM directory)."""
 
@@ -82,8 +116,8 @@ class _Job:
 class MRSegGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("MRSegmentator")
-        self.root.minsize(640, 560)
+        self.root.title(PRODUCT_NAME)
+        self.root.minsize(640, 640)
 
         self._jobs: List[_Job] = []
         self._queue: "queue.Queue[Tuple[str, object]]" = queue.Queue()
@@ -109,12 +143,38 @@ class MRSegGUI:
         root = self.root
         root.columnconfigure(0, weight=1)
 
+        # --- Header: title, light-mode note, links --------------------------
+        header = ttk.Frame(root)
+        header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
+        header.columnconfigure(0, weight=1)
+
+        title_row = ttk.Frame(header)
+        title_row.grid(row=0, column=0, sticky="w")
+        title_font = tkfont.Font(family="Segoe UI", size=15, weight="bold")
+        ttk.Label(title_row, text=PRODUCT_NAME, font=title_font).pack(side="left")
+        ttk.Label(title_row, text=f"   {SUBTITLE}", foreground=MUTED_COLOR).pack(side="left")
+
+        ttk.Label(header, text=LIGHT_MODE_NOTE, foreground=MUTED_COLOR).grid(
+            row=1, column=0, sticky="w", pady=(2, 4)
+        )
+
+        links_row = ttk.Frame(header)
+        links_row.grid(row=2, column=0, sticky="w", pady=(0, 6))
+        for index, (text, url) in enumerate(LINKS):
+            if index:
+                ttk.Label(links_row, text="   ·   ", foreground=SEPARATOR_COLOR).pack(
+                    side="left"
+                )
+            _make_link(links_row, text, url).pack(side="left")
+
+        ttk.Separator(header, orient="horizontal").grid(row=3, column=0, sticky="ew", pady=(2, 0))
+
         # --- Inputs -----------------------------------------------------
         input_frame = ttk.LabelFrame(root, text="Input images")
-        input_frame.grid(row=0, column=0, sticky="nsew", **pad)
+        input_frame.grid(row=1, column=0, sticky="nsew", **pad)
         input_frame.columnconfigure(0, weight=1)
         input_frame.rowconfigure(0, weight=1)
-        root.rowconfigure(0, weight=1)
+        root.rowconfigure(1, weight=1)
 
         list_wrap = ttk.Frame(input_frame)
         list_wrap.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
@@ -146,7 +206,7 @@ class MRSegGUI:
 
         # --- Output -------------------------------------------------------
         out_frame = ttk.LabelFrame(root, text="Output directory")
-        out_frame.grid(row=1, column=0, sticky="ew", **pad)
+        out_frame.grid(row=2, column=0, sticky="ew", **pad)
         out_frame.columnconfigure(0, weight=1)
 
         ttk.Entry(out_frame, textvariable=self.outdir_var).grid(
@@ -161,7 +221,7 @@ class MRSegGUI:
 
         # --- Model + fixed settings ---------------------------------------
         model_frame = ttk.LabelFrame(root, text="Model")
-        model_frame.grid(row=2, column=0, sticky="ew", **pad)
+        model_frame.grid(row=3, column=0, sticky="ew", **pad)
         ttk.Radiobutton(
             model_frame, text="Base (default)", variable=self.model_var, value="base"
         ).pack(side="left", padx=8, pady=6)
@@ -176,7 +236,7 @@ class MRSegGUI:
 
         # --- Run controls ---------------------------------------------------
         run_frame = ttk.Frame(root)
-        run_frame.grid(row=3, column=0, sticky="ew", **pad)
+        run_frame.grid(row=4, column=0, sticky="ew", **pad)
         run_frame.columnconfigure(0, weight=1)
 
         self.run_button = ttk.Button(run_frame, text="Run", command=self._on_run)
@@ -191,7 +251,7 @@ class MRSegGUI:
 
         # --- Progress ---------------------------------------------------
         progress_frame = ttk.Frame(root)
-        progress_frame.grid(row=4, column=0, sticky="ew", **pad)
+        progress_frame.grid(row=5, column=0, sticky="ew", **pad)
         progress_frame.columnconfigure(0, weight=1)
 
         self.overall_progress = ttk.Progressbar(
@@ -209,10 +269,10 @@ class MRSegGUI:
 
         # --- Log ----------------------------------------------------------
         log_frame = ttk.LabelFrame(root, text="Log")
-        log_frame.grid(row=5, column=0, sticky="nsew", **pad)
+        log_frame.grid(row=6, column=0, sticky="nsew", **pad)
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
-        root.rowconfigure(5, weight=2)
+        root.rowconfigure(6, weight=2)
 
         self.log_text = ScrolledText(log_frame, height=12, state="disabled", wrap="none")
         self.log_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)

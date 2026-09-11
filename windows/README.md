@@ -71,6 +71,10 @@ the same CLI, invoked as a subprocess per selected input with a fixed
   parsed out of the current line drives the progress bar. **Cancel** stops
   after the current file.
 
+The header names the project, notes that this is a CPU-friendly light mode
+(single fold, fast settings), and links to the codebase and both papers —
+opened with the system's default browser via `webbrowser.open()`.
+
 Nothing under `src/` is touched by the GUI either, and it adds no new
 dependency: it's built entirely on `tkinter`, which ships with Python.
 
