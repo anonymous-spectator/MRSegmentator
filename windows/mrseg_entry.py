@@ -9,11 +9,18 @@ installation does: ``mrsegmentator.main:main``. Everything else (argument
 parsing, logging, inference) is the unmodified MRSegmentator code --
 ``sys.argv`` is passed through untouched.
 
-There is one addition on top of the pip CLI: started with no arguments at
-all -- what always happens when the exe is double-clicked in Explorer -- it
-opens ``mrseg_gui.py`` instead of falling into ``parser.initialize()``'s
-bare "print help and exit" path. Any real argument (as any terminal
-invocation supplies) still takes the normal CLI path untouched.
+There are two additions on top of the pip CLI:
+
+* started with no arguments at all -- what always happens when the exe is
+  double-clicked in Explorer -- it opens ``mrseg_gui.py`` instead of falling
+  into ``parser.initialize()``'s bare "print help and exit" path. Any real
+  argument (as any terminal invocation supplies) still takes the normal CLI
+  path untouched.
+* started with the single hidden argument ``--mrseg-install-weights``, it
+  downloads/moves the model weights into place next to the executable and
+  exits, instead of doing anything CLI- or GUI-related. This is what the
+  Inno Setup installer's post-install step calls -- see
+  ``frozen_support.install_weights()``.
 
 This build only ever produces ``mrsegmentator.exe`` -- no second entry point
 for the ``dicom_helper`` (``dcm_helper``) console script. DICOM *input*
@@ -25,6 +32,8 @@ directory given as ``--input`` (see ``src/mrsegmentator/main.py``), so
 import multiprocessing
 import sys
 from typing import Callable
+
+INSTALL_WEIGHTS_FLAG = "--mrseg-install-weights"
 
 
 def _resolve_main() -> Callable[[], None]:
@@ -43,6 +52,11 @@ def _resolve_main() -> Callable[[], None]:
 
 
 def main() -> None:
+    if sys.argv[1:] == [INSTALL_WEIGHTS_FLAG]:
+        import frozen_support
+
+        sys.exit(frozen_support.install_weights())
+
     _resolve_main()()
 
 

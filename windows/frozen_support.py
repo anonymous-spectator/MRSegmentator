@@ -412,6 +412,49 @@ def install_nnunet_import_patch() -> None:
 
 
 # ---------------------------------------------------------------------------
+# One-time weight installation (called by the Inno Setup installer)
+# ---------------------------------------------------------------------------
+def install_weights() -> int:
+    """Get every registered model's weights into ``<app_dir>/weights``.
+
+    This is the ``--mrseg-install-weights`` handler, run once by the Inno
+    Setup installer's post-install step so that a build made with
+    ``--no-weights`` still ends up with weights on disk before the user ever
+    runs an analysis -- rather than the first real run paying that cost.
+
+    Reuses ``mrsegmentator.config.ensure_model()`` for the actual download,
+    so it is naturally idempotent: re-running the installer (e.g. while
+    iterating on it) skips any model whose weights are already at the
+    expected version. Weights already sitting in the default
+    ``~/.mrsegmentator`` location (e.g. from local development) are moved
+    into place instead of being re-downloaded.
+    """
+    import shutil
+
+    from mrsegmentator import config
+
+    target = app_dir() / WEIGHTS_DIR_NAME
+    target.mkdir(parents=True, exist_ok=True)
+    os.environ[WEIGHTS_ENV_VAR] = str(target)
+
+    default_root = Path.home() / ".mrsegmentator"
+
+    for name, entry in config.MODEL_REGISTRY.items():
+        dest = target / name
+        source = default_root / name
+        if (not dest.is_dir() or not any(dest.iterdir())) and source.is_dir():
+            if config._read_model_version(source) >= entry["version"]:
+                print(f"[{name}] moving already-downloaded weights from {source}")
+                shutil.move(str(source), str(dest))
+
+        print(f"[{name}] checking weights...")
+        config.setup_mrseg(name)
+
+    print("\nWeights installation complete.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 def bootstrap() -> Dict[str, Any]:

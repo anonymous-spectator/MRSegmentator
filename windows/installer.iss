@@ -3,12 +3,13 @@
 ; http://www.apache.org/licenses/LICENSE-2.0
 ;
 ; Inno Setup script for a real MRSegmentator installer: installs the
-; already-built folder distribution to a stable per-user location and adds
-; Desktop / Start Menu shortcuts, so the end user only ever unpacks the
-; multi-GB weights once (at install time), not on every launch -- the
-; problem onefile mode has on the PyInstaller backend, and the one this
-; installer is meant to replace for anyone who wants a single file to hand
-; out without paying that runtime cost. See the "Installer" section of
+; already-built folder distribution (built without weights) to a stable
+; per-user location, adds Desktop / Start Menu shortcuts, and downloads the
+; model weights once as its last [Run] step -- so weights are fetched and
+; unpacked exactly once, at install time, rather than embedded in the build
+; or re-unpacked on every launch (onefile mode's problem on the PyInstaller
+; backend, and the one this installer is meant to replace for anyone who
+; wants a single thing to hand out). See "Installer & weights" in
 ; windows/README.md.
 ;
 ; build_windows_exe.py --installer compiles this with Inno Setup's ISCC.exe,
@@ -70,4 +71,10 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
+; One-time weight download/placement, so the first analysis a user runs
+; doesn't pay this cost. mrsegmentator.exe --mrseg-install-weights is
+; idempotent (see frozen_support.install_weights()): if the build already
+; shipped weights, or a previous install already fetched them, it does
+; nothing and returns immediately.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--mrseg-install-weights"; StatusMsg: "Downloading model weights (one-time, several GB, needs internet)..."; Flags: waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent

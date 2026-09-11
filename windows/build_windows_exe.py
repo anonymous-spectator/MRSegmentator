@@ -454,8 +454,15 @@ def write_readme(
     backend: str,
     version: str,
     onefile: bool,
+    installer: bool = False,
 ) -> None:
-    if not with_weights:
+    if installer:
+        weights_note = (
+            "Model weights are downloaded once, right after installation, into\n"
+            "the weights\\ folder next to mrsegmentator.exe (internet required "
+            "then;\nnothing is downloaded on later runs)."
+        )
+    elif not with_weights:
         weights_note = (
             "Model weights are NOT included. On first use they are downloaded\n"
             "to %USERPROFILE%\\.mrsegmentator (about 2 GB, internet required)."
@@ -687,9 +694,10 @@ def parse_args() -> argparse.Namespace:
         "--installer",
         action="store_true",
         help="also build a real installer (Inno Setup): installs to a stable "
-        "per-user location with a Desktop shortcut, so weights are unpacked "
-        "once at install time rather than on every launch. Requires Inno "
-        "Setup (https://jrsoftware.org/isdl.php) and a folder build -- "
+        "per-user location with a Desktop shortcut, and downloads the model "
+        "weights once, right after install (the build itself ships without "
+        "them and needs no internet access). Requires Inno Setup "
+        "(https://jrsoftware.org/isdl.php) and a folder build -- "
         "incompatible with --onefile, whose whole point this replaces",
     )
     parser.add_argument(
@@ -729,6 +737,10 @@ def main() -> int:
                 "in the default install location or on PATH. Install Inno Setup "
                 "(https://jrsoftware.org/isdl.php), or pass --iscc <path to ISCC.exe>."
             )
+        # The installer downloads weights itself, once, right after install
+        # (mrsegmentator.exe --mrseg-install-weights, see installer.iss) --
+        # so the build itself never needs weights or internet access.
+        args.with_weights = False
 
     check_environment(args.backend)
 
@@ -750,6 +762,8 @@ def main() -> int:
         staged_weights = stage_weights(
             output_dir / "weights_staging", list(args.models), args.weights_cache
         )
+    elif args.installer:
+        info("Skipping weight staging: the installer downloads them after install")
 
     # Only a one-file build embeds the weights in the executable itself; a
     # folder build keeps shipping them as a sibling weights/ directory
@@ -799,6 +813,7 @@ def main() -> int:
         args.backend,
         version,
         args.onefile,
+        installer=args.installer,
     )
 
     ok = True

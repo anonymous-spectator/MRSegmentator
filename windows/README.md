@@ -1,244 +1,145 @@
 # Building a Windows executable
 
 This folder builds a self-contained Windows `.exe` of MRSegmentator that
-behaves like the pip installation — same CLI, same flags — but ships its model
-weights, so the end user never deals with weight management or downloads.
+behaves like the pip installation -- same CLI, same flags -- without the user
+ever installing Python or managing model weights.
 
-Nothing in `src/` is modified. This directory is entirely additive: remove it
-and the project is unchanged. It is also excluded from `make lint` / `make type`,
-which only cover `src` and `tests`.
+Nothing in `src/` is modified; this directory is entirely additive (remove it
+and the project is unchanged), and it is excluded from `make lint` / `make type`.
 
 ```
 windows/
   build_windows_exe.py   build driver (weights + manifest + compiler + packaging)
-  build.ps1              convenience wrapper: venv, deps, build
-  fetch_weights.py       downloads, verifies and stages the weights
-  mrseg_entry.py         the entry point that gets compiled
-  frozen_support.py      runtime fixes that only apply to the frozen build
-  mrseg_gui.py           the GUI shown on a no-argument (double-click) launch
-  installer.iss          Inno Setup script for --installer (optional)
+  build.ps1               convenience wrapper: venv, deps, build
+  fetch_weights.py        downloads, verifies and stages weights at build time
+  mrseg_entry.py          the entry point that gets compiled
+  frozen_support.py       runtime fixes that only apply to the frozen build
+  mrseg_gui.py            the GUI shown on a no-argument (double-click) launch
+  installer.iss           Inno Setup script for --installer
 ```
+
+Only `mrsegmentator.exe` is built -- there is no separate `dcm_helper.exe`.
+DICOM input still works: `mrsegmentator.main` converts a DICOM directory
+passed as `--input` itself, so `dicom_helper` just ships as a normal bundled
+dependency.
 
 ## Quick start
 
-On a Windows machine with Python 3.10–3.13 and
+On a Windows machine with Python 3.10-3.13 and
 [Visual Studio Build Tools 2022](https://visualstudio.microsoft.com/downloads/)
-("Desktop development with C++") installed (plus
-[Inno Setup](https://jrsoftware.org/isdl.php) if you'll use `-Installer` —
-see below):
+("Desktop development with C++"), plus
+[Inno Setup](https://jrsoftware.org/isdl.php) if you want a real installer:
 
 ```powershell
 git clone https://github.com/hhaentze/MRSegmentator
 cd MRSegmentator
+.\windows\build.ps1 -Installer -Icon path\to\your_logo.ico
+```
+
+That produces a per-user installer (Desktop shortcut, uninstaller) which
+downloads the model weights once, right after installation -- see
+[Installer & weights](#installer--weights) below. `-Icon` takes any `.ico`
+file and passes it straight to the compiler; build a proper multi-resolution
+(16/32/48/256px), square `.ico` first.
+
+Without `-Installer` you get a plain folder build in
+`build\windows\mrseg_entry.dist\`, weights included by default:
+
+```powershell
 .\windows\build.ps1
 ```
 
-The result lands in `build\windows\mrseg_entry.dist\`:
-
 ```
-mrsegmentator.exe        same CLI as the `mrsegmentator` console script
-weights\base\            shipped; nothing is downloaded at first run
+mrsegmentator.exe        same CLI as the pip `mrsegmentator` console script
+weights\base\            shipped; nothing downloaded at first run
 weights\body_comp\
-README.txt               end-user instructions
+README.txt
 <runtime DLLs and data>
 ```
 
-Only `mrsegmentator.exe` is built. `dicom_helper` (DICOM I/O) is still a
-normal bundled dependency, since `mrsegmentator.main` itself uses it when
-`--input` is a DICOM directory — this only means there is no separate
-`dcm_helper.exe` console-script entry point.
+Double-clicking `mrsegmentator.exe` opens a GUI; from a terminal it behaves
+exactly like the pip installation: `mrsegmentator.exe --input scan.nii.gz
+--outdir segmentations`.
 
-The end user unzips that folder. Double-clicking `mrsegmentator.exe` opens a
-GUI (see below); from a terminal it behaves exactly like the pip installation:
-
-```
-mrsegmentator.exe --input scan.nii.gz --outdir segmentations
-```
-
-For a single self-contained `.exe` instead (weights embedded), add `-OneFile`
-— see [`--onefile`](#--onefile-a-single-exe-with-the-weights-baked-in) below
-for what that actually costs before reaching for it:
-
-```powershell
-.\windows\build.ps1 -OneFile -Icon path\to\your_logo.ico
-```
-
-`-Icon` takes a `.ico` file and passes it straight to the compiler as the
-executable's icon — no default, no conversion; see [Icon](#icon) below.
-
-For a real installer instead (Desktop shortcut, no per-launch unpack cost
-on either backend, an uninstaller) — see
-[`--installer`](#--installer-a-real-installer-instead-of-onefile) below:
-
-```powershell
-.\windows\build.ps1 -Installer
-```
+For a single self-contained `.exe` instead, add `-OneFile` (weights get
+embedded in the binary -- see [Onefile](#onefile) for the cost this has on
+PyInstaller before reaching for it).
 
 ## Graphical interface
 
-Starting `mrsegmentator.exe` with **no arguments at all** — what a
-double-click in Explorer always does — opens a simplified GUI
-(`mrseg_gui.py`) instead of the CLI's usual "print `--help` and exit" for a
-bare invocation. Any real argument, from a terminal or a script, still takes
-the normal CLI path untouched.
+Starting `mrsegmentator.exe` with **no arguments at all** -- what a
+double-click in Explorer always does -- opens a simplified GUI
+(`mrseg_gui.py`) instead of the CLI's usual "print `--help` and exit". Any
+real argument still takes the normal CLI path untouched.
 
-The GUI itself never calls into inference code directly — each run is just
-the same CLI, invoked as a subprocess per selected input with a fixed
-`--fast --split_level 1`:
+The GUI never calls into inference code directly: each run is the same CLI,
+invoked as a subprocess with a fixed `--fast --split_level 1`. It adds one
+input picker (files or a folder, DICOM included), an output directory, a
+Base/Body-composition model choice, and a log pane with a progress bar parsed
+from the CLI's own tqdm output. It's built entirely on `tkinter` (ships with
+Python), so nothing under `src/` is touched and no new dependency is added.
 
-* **Add files...** / **Add folder...** — one or more images, or a folder
-  (batched as a single run, same as `--input <dir>` on the CLI; a folder of
-  DICOM files works too, exactly as it does on the CLI).
-* **Output directory** — shared by all runs in the batch.
-* **Model** — Base (default) or Body composition, mirroring `--body_comp`.
-* **Run** processes the queued inputs one at a time and shows a log pane
-  with the CLI's own output, including tqdm progress lines; a percentage
-  parsed out of the current line drives the progress bar. **Cancel** stops
-  after the current file.
-
-The header sits on its own tinted panel: the project name and subtitle, a
-short note that this is a CPU-friendly light mode (single fold, fast
-settings), and three colored, rounded badge links to the codebase and both
-papers — styled like a shields.io/GitHub README badge, each opened with the
-system's default browser via `webbrowser.open()`. The badges are drawn on a
-plain `tk.Canvas` (rounded-rect polygon + centered text) since neither
-`tk` nor `ttk` has a built-in rounded button.
-
-Nothing under `src/` is touched by the GUI either, and it adds no new
-dependency: it's built entirely on `tkinter`, which ships with Python.
-
-### Console vs. GUI at the OS level
-
-A CLI tool and a windowed GUI normally need two different Windows
-"subsystems" — a console app always gets a console window (even when
-double-clicked), a windowed app never does (even run from a terminal, its
-output goes nowhere visible). One executable needs to behave like a console
-app from a terminal and like a windowed app from Explorer, which is what
+A CLI tool and a windowed GUI normally need different Windows "subsystems".
 `--windows-console-mode=attach` (Nuitka) and the `--windowed` build +
-`frozen_support.attach_console_if_present()` (PyInstaller) below provide.
+`frozen_support.attach_console_if_present()` (PyInstaller) make one exe act
+like a console app from a terminal and a windowed app from Explorer.
+
+## Installer & weights
+
+`-Installer` compiles `windows/installer.iss` with
+[Inno Setup](https://jrsoftware.org/isdl.php)'s `ISCC.exe` (a build-time tool
+only; found automatically, or point `-Iscc` at it) into a single installer
+`.exe`. Double-clicking it once extracts everything to
+`%LOCALAPPDATA%\Programs\MRSegmentator` (no admin/UAC prompt) and adds a
+Desktop shortcut, an uninstaller and an Add/Remove Programs entry; from then
+on `mrsegmentator.exe` is a normal file on disk with no per-launch unpack cost
+on either backend. `AppId` is a fixed GUID, so installing a newer build
+upgrades in place instead of duplicating the entry.
+
+**Weights are downloaded after install, not baked into the build.** A
+`--installer` build always skips weight staging (no internet needed to build),
+and `installer.iss` runs `mrsegmentator.exe --mrseg-install-weights` as its
+last step, which:
+
+* downloads each model's weights straight into `<install dir>\weights` (a few
+  GB, needs internet, shown as a status message during install);
+* skips any model that's already there and current -- re-running the
+  installer (e.g. while iterating on it locally) does not re-download;
+* moves weights already sitting in `~/.mrsegmentator` (e.g. from local
+  `pip install`-based development) into place instead of re-downloading them.
+
+This reuses `mrsegmentator.config.ensure_model()` verbatim (see
+`frozen_support.install_weights()`), so the version/checksum logic lives in
+exactly one place.
+
+`--installer` is incompatible with `--onefile`: an installed folder already
+has no per-launch unpack cost, which is the only problem onefile mode solves.
+
+## Onefile
+
+Without `-OneFile`, weights ship as a `weights\` folder next to the `.exe`
+(the default). With it, weights are embedded in the single compiled binary.
+The backends differ in what that costs at *run* time:
+
+* **Nuitka** caches its one-time unpack in a stable, version-keyed directory,
+  so only the first launch after installing (or updating) is slow.
+* **PyInstaller** has no such cache: it re-extracts the whole multi-GB payload
+  on *every* launch. `build_windows_exe.py` warns loudly if you combine
+  `--onefile`, `--backend pyinstaller` and weights.
+
+If you want one file to hand out without either cost, prefer `--zip` (a
+zipped folder build) or `--installer` (an installed, un-zipped copy) instead.
 
 ## Nuitka vs. PyInstaller
 
-Both are supported; `--backend nuitka` is the default.
-
-|                   | Nuitka                                | PyInstaller                          |
-| ----------------- | ------------------------------------- | ------------------------------------ |
-| How it works      | Compiles Python to C, then to machine code | Bundles CPython + your `.pyc` files |
-| Build time (this stack) | 30–90 min                       | 5–15 min                             |
-| Startup           | Noticeably faster                     | Slower (unpacking, bytecode import)  |
-| Runtime speed     | Marginal gain here — the work is inside PyTorch kernels, which are precompiled C++ either way | baseline |
-| Distribution size | Comparable; dominated by torch either way | comparable                       |
-| Source protection | Real (compiled)                       | Minimal (`.pyc` is trivially recovered) |
-| Requires          | A C compiler (MSVC)                   | Nothing extra                        |
-| PyTorch support   | Dedicated `torch` plugin, but the long tail of dynamic imports is more fragile | Mature, well-trodden hooks |
-
-**Recommendation:** Nuitka, as preferred — the startup win is real for a CLI
-tool, and compiled code is a nicer artifact to hand out. Keep PyInstaller as
-the fallback: torch plus nnU-Net is the stress case for Nuitka, and if a build
-goes sideways, `--backend pyinstaller` will usually get you an artifact within
-the hour. The two share the entry point, the weight staging and the packaging,
-so switching is a one-flag change.
-
-Note that neither tool makes the segmentation itself faster. Runtime is
-dominated by PyTorch, which is already compiled C++/CUDA.
-
-## What actually needed solving
-
-Freezing this application is not just "point a compiler at `main.py`". Four
-things break, and `frozen_support.py` fixes each one at startup.
-
-### 1. Weights
-
-`config._resolve_root()` checks `MRSEG_WEIGHTS_PATH` first and otherwise
-downloads into `~/.mrsegmentator`. The build stages the weights into
-`weights\` next to the executable, using the multi-model layout
-(`weights\base\`, `weights\body_comp\`), and the entry point points
-`MRSEG_WEIGHTS_PATH` at it before anything else runs.
-
-`version.json` is staged alongside each model, which is what makes this work
-offline: `ensure_model()` compares it against `MODEL_REGISTRY` and, finding the
-weights current, returns without downloading. (Without that file the version
-reads as 0.0 and every run would try to re-download into a directory the user
-may not even be able to write to.) `fetch_weights.py` writes the file if the
-release archive does not already contain it.
-
-Because the layout is the regular one rather than a raw nnU-Net directory,
-legacy mode stays off and `--body_comp` keeps working.
-
-A user-supplied `MRSEG_WEIGHTS_PATH` still wins, so the exe stays as
-configurable as the pip installation. If no bundled weights are present
-(`--no-weights` builds) the variable is left alone and the normal
-download-to-`~/.mrsegmentator` behaviour applies.
-
-> Note: the variable is `MRSEG_WEIGHTS_PATH`, not `MRSEG_WEIGHTS_DIR`.
-
-### 2. nnU-Net's dynamic class lookup — the one that would really bite
-
-nnU-Net does not import its trainer, its resampling functions or its image
-reader/writer with `import` statements. It reads their *names* from
-`plans.json` / `dataset.json` and resolves them at runtime with
-`recursive_find_python_class()`, which walks the **file system** underneath
-`nnunetv2.__path__[0]` using `pkgutil.iter_modules`.
-
-A frozen build has no `.py` files to walk. The scan returns nothing, the lookup
-returns `None`, and inference dies with *"Could not find trainer class"* — and
-no amount of `--hidden-import` fixes it, because the failure is a directory
-listing coming back empty, not a missing module.
-
-The fix has two halves:
-
-* **Build time** — `build_windows_exe.py` records every module under the
-  packages nnU-Net searches (`nnunetv2.training.nnUNetTrainer`,
-  `nnunetv2.preprocessing.resampling`, `nnunetv2.imageio`,
-  `nnunetv2.utilities.label_handling`) into `nnunet_module_manifest.json`, and
-  force-includes all of them in the binary. The same manifest covers
-  `dynamic_network_architectures.architectures`, which nnU-Net resolves through
-  `pydoc.locate()` from the `network_class_name` in `plans.json`.
-* **Run time** — `frozen_support.py` replaces `recursive_find_python_class`
-  with one that tries the original first and otherwise resolves the name
-  against the manifest.
-
-The replacement is installed through a `sys.meta_path` hook that fires when
-`nnunetv2.utilities.find_class_by_name` is first imported. That matters for two
-reasons: call sites do `from ... import recursive_find_python_class`, binding
-the function *by value* at their own import time, so patching has to happen
-before they load; and the hook itself imports nothing, which preserves the
-deferred-import trick in `main.py` that keeps `--help` fast.
-
-`recursive_find_python_class()`'s own signature has grown across nnU-Net
-versions — the package range in `setup.cfg` (`nnunetv2>=2.2.1,<=2.8.0`) spans
-both a plain `(folder, class_name, current_module)` and, since a later
-release, a 4th positional `base_folder` plus keyword-only `verbose` and
-`cleanup_imports_from_base_folder` used by the external-trainer-path fallback.
-The replacement therefore takes `*args, **kwargs` and only ever reads out
-`class_name` and `current_module` (positional or keyword, whichever the
-call site used) — it stays a drop-in regardless of which signature the
-installed nnU-Net actually has, instead of hard-coding one arity and breaking
-on the other with `TypeError: ... takes N positional arguments but M were
-given`.
-
-### 3. multiprocessing
-
-nnU-Net runs preprocessing and export in worker processes. Windows has no
-`fork`, so each worker re-launches the executable, which without
-`multiprocessing.freeze_support()` means every worker re-runs the whole program
-— a fork bomb. `mrseg_entry.py` calls it before anything else.
-
-Subtle consequence: the workers re-enter the entry point, so the hook from (2)
-has to be installed *before* `freeze_support()`. nnU-Net's export workers
-resolve resampling functions in the child process, not the parent.
-
-### 4. Console vs. GUI dispatch
-
-`mrseg_entry.py` opens the GUI when started with no arguments and runs the
-CLI otherwise (see [Graphical interface](#graphical-interface) above). On the
-PyInstaller backend the exe is built `--windowed`, i.e. with no console of
-its own, so `frozen_support.attach_console_if_present()` reattaches
-stdout/stderr to the launching terminal's console when one exists — before
-anything prints, including argparse's own `--help` — so a terminal
-invocation still behaves like a normal CLI tool. It has to run before
-`bootstrap()`. On Nuitka this is a no-op: `--windows-console-mode=attach`
-already did the equivalent at the C level, before Python even started.
+`--backend nuitka` (default) compiles Python to machine code: faster startup,
+real source protection, but a 30-90 min build needing a C compiler (MSVC).
+`--backend pyinstaller` just bundles CPython + `.pyc` files: a 5-15 min build
+needing nothing extra, slightly slower startup, `.pyc` is trivially
+recoverable. Neither changes segmentation speed -- that's PyTorch, compiled
+either way. The two share the entry point, weight staging and packaging, so
+switching is a one-flag change; Nuitka is preferred, PyInstaller is the
+fallback if a Nuitka build goes sideways.
 
 ## Options
 
@@ -246,112 +147,54 @@ already did the equivalent at the C level, before Python even started.
 python windows\build_windows_exe.py [options]
 
   --backend {nuitka,pyinstaller}   compiler (default: nuitka)
-  --onefile                        single, self-contained .exe (weights embedded)
-                                    instead of a folder
-  --no-weights                     do not ship weights
+  --onefile                        single self-contained .exe (weights embedded)
+  --no-weights                     do not ship weights (ignored with --installer,
+                                    which never bakes weights in either way)
   --models base body_comp          which models to ship (default: both)
   --icon PATH                      .ico file, passed straight to the compiler
-                                    (no default, no conversion)
   --zip                            also produce a distributable archive
   --installer                      also build an installer with Inno Setup
                                     (incompatible with --onefile)
-  --iscc PATH                      path to Inno Setup's ISCC.exe, if not found
-                                    automatically
+  --iscc PATH                      path to ISCC.exe, if not found automatically
   --skip-compile                   re-package an existing build
   --jobs N                         parallel compile jobs (nuitka)
 ```
 
-Weight archives are cached in `%TEMP%\mrseg_weight_cache` between builds, and
-staged weights are reused, so re-running the build does not re-download 2 GB.
+Downloaded weight archives are cached in `%TEMP%\mrseg_weight_cache` between
+non-installer builds, so re-running does not re-download several GB.
 
-### `--onefile`: a single .exe with the weights baked in
+## What makes this work
 
-Without `--onefile` the weights ship as a `weights\` folder next to the .exe
-(the default, and what the rest of this doc assumes). With it, the weights
-are embedded directly in the compiled binary via `--include-data-dir`
-(Nuitka) / `--add-data` (PyInstaller) — `frozen_support.bundled_weights_dir()`
-already searches the onefile unpack location first, so no runtime code needed
-to change for this to work. The result really is one file: sharing it is
-copying that one `.exe` (a few GB, dominated by the weights), nothing else.
+Freezing this application needed four fixes, all in `frozen_support.py`:
 
-The two backends differ in what "unpack" costs at run time, because only one
-of them can cache it:
+1. **Weights** -- `MRSEG_WEIGHTS_PATH` (not `_DIR`) is pointed at the bundled
+   `weights\` folder before anything else runs, with a `version.json` staged
+   alongside each model so `ensure_model()` never re-downloads offline. A
+   user-supplied `MRSEG_WEIGHTS_PATH` still wins.
+2. **nnU-Net's dynamic class lookup** -- nnU-Net resolves its trainer,
+   resampling functions and reader/writer by *scanning the file system* under
+   `nnunetv2.__path__[0]` (`recursive_find_python_class()`), which finds
+   nothing in a frozen build (no `.py` files to walk) and fails with *"Could
+   not find trainer class"*. `build_windows_exe.py` records every module nnU-Net
+   could look up into `nnunet_module_manifest.json` at build time; a
+   `sys.meta_path` post-import hook in `frozen_support.py` replaces the lookup
+   function with one that falls back to that manifest, installed before any
+   call site can bind the original by value.
+3. **multiprocessing** -- Windows has no `fork`, so nnU-Net's workers
+   re-launch the executable; `mrseg_entry.py` calls
+   `multiprocessing.freeze_support()` first, *after* installing the hook from
+   (2), since spawned workers re-enter the entry point too.
+4. **Console vs. GUI dispatch** -- see [Graphical interface](#graphical-interface).
 
-* **Nuitka** sets `--onefile-tempdir-spec` to a stable, version-keyed cache
-  directory (no `{PID}`/`{TIME}` in it) instead of Nuitka's own default of a
-  fresh temp dir per run. Nuitka reuses that cache and skips re-extracting
-  when it's already there and matches this build, so only the *first* launch
-  after installing (or after updating to a new version) pays the unpack cost;
-  every launch after that starts close to instantly.
-* **PyInstaller** has no equivalent option: its onefile bootstrap always
-  extracts to a fresh temp directory and deletes it on exit, so **every
-  single launch** re-unpacks the whole multi-GB payload before the window
-  even appears -- noticeably slower to open, and noticeably more CPU/disk
-  activity (decompressing multiple GB), every time, not just once. Bearable
-  for a small onefile app; a real, repeated cost once weights are embedded.
-  `build_windows_exe.py` prints a loud warning at build time whenever this
-  exact combination (`--onefile` + `--backend pyinstaller` + weights) is
-  chosen, so it's a decision rather than a surprise. If that cost matters
-  more to you than Nuitka's longer compile time, prefer the Nuitka backend
-  for a onefile build.
-
-If you'd rather not accept either onefile trade-off but still want a single
-file to hand someone, `--zip` (below) already gives you that for the default
-folder build, without any unpack cost at every launch -- or see `--installer`
-next for a real installer instead of a zip, which also avoids the per-launch
-unpack cost while still being one file to hand out.
-
-### `--installer`: a real installer instead of onefile
-
-`--installer` compiles `windows/installer.iss` with
-[Inno Setup](https://jrsoftware.org/isdl.php) into a single installer `.exe`
-that wraps the normal folder build. Requires Inno Setup's `ISCC.exe`
-compiler (a build-time tool only; end users need nothing extra) — found
-automatically in its default install location or on `PATH`, or point
-`--iscc` at it directly.
-
-This exists because neither onefile backend is actually free: Nuitka's is
-only fast after the *first* launch, and PyInstaller's re-unpacks every
-single time (see `--onefile` above). An installer sidesteps both --
-double-clicking it once extracts everything to a stable per-user location
-(`%LOCALAPPDATA%\Programs\MRSegmentator`, no admin/UAC prompt needed) and
-adds a Desktop shortcut; from then on `mrsegmentator.exe` is just a normal
-file on disk; launches are exactly as fast as the plain folder build,
-indefinitely, on any backend. `--installer` is incompatible with
-`--onefile` for that reason — the whole point of one replaces the other.
-
-The installer also gets an uninstaller and an Add/Remove Programs entry for
-free from Inno Setup. `AppId` in `installer.iss` is a fixed GUID, so
-installing a newer build over an older one upgrades it in place rather than
-creating a second entry.
-
-## Icon
-
-`--icon PATH` (`-Icon PATH` in build.ps1) takes a `.ico` file and passes it
-straight to the compiler as the executable's icon
-(`--windows-icon-from-ico` for Nuitka, `--icon` for PyInstaller) -- no
-default, no conversion, no validation beyond checking the file exists. Build
-a proper `.ico` yourself (multi-resolution -- 16/32/48/256 px -- and square)
-before pointing `--icon` at it; passing something malformed is on you, not
-this script.
-
-The GUI window itself does not set a custom icon at runtime (Tk's default);
-only the `.exe` file's own icon is affected by `--icon`.
-
-**Windows caches file icons.** If you rebuild with a different icon and
-Explorer still shows the old one on the `.exe`, that's the icon cache, not a
-build issue -- moving/renaming the file, or logging off and back on, forces
-a refresh.
+Run with `MRSEG_FROZEN_DEBUG=1` set to see which weights directory, manifest
+and dynamic lookups this machinery actually used.
 
 ## GPU or CPU
 
-The default build ships CPU-only torch. That runs on any machine and keeps the
-distribution around 2 GB plus weights.
-
-`.\windows\build.ps1 -Cuda` ships CUDA torch instead: several GB larger, and it
-only helps users who have a matching NVIDIA driver. For a general-purpose
-download, CPU-only plus `--fast` is usually the better trade; ship a separate
-CUDA build if your users need the speed.
+The default build ships CPU-only torch (~2 GB + weights, runs anywhere).
+`.\windows\build.ps1 -Cuda` ships CUDA torch instead (several GB larger,
+only helps machines with a matching NVIDIA driver) -- ship it as a separate
+build if your users need the speed.
 
 ## Verifying a build
 
@@ -361,46 +204,26 @@ cd build\windows\mrseg_entry.dist
 .\mrsegmentator.exe --input <a real scan> --outdir out --fast --cpu_only
 ```
 
-The build script already runs the `--help` check and fails the build if the
-executable does not start. That only exercises the CLI path, though — also
-double-click `mrsegmentator.exe` in Explorer (or run it with no arguments
-from a terminal) at least once to confirm the GUI opens and a run completes.
-
-If something misbehaves at runtime, the frozen-build machinery explains itself:
-
-```powershell
-set MRSEG_FROZEN_DEBUG=1
-.\mrsegmentator.exe --input scan.nii.gz --outdir out
-```
-
-This prints which weights directory was chosen, whether the manifest was found,
-and every dynamic class lookup it resolves.
-
-For an `--installer` build, additionally run the installer `.exe` itself at
-least once: confirm it completes without a UAC prompt, that the Desktop
-shortcut appears and launches `mrsegmentator.exe` from
-`%LOCALAPPDATA%\Programs\MRSegmentator`, and that the uninstaller (from the
-Start Menu group or Add/Remove Programs) removes it cleanly.
+The build already runs `--help` as a smoke test and fails if the executable
+doesn't start -- that only covers the CLI path, so also double-click
+`mrsegmentator.exe` at least once to confirm the GUI opens and a run
+completes. For an `--installer` build, additionally run the installer once:
+confirm no UAC prompt, that weights download (or are skipped if already
+present), that the Desktop shortcut works, and that uninstalling removes
+everything.
 
 ## Known Windows issues
 
-* **Antivirus.** Freshly compiled binaries are routinely flagged. Signing the
-  executable is the only real fix for distribution at scale. Installer
-  executables (Inno Setup's included) get flagged too, sometimes even more
-  readily since installers are also a common malware vector.
-* **`MAX_PATH`.** torch and nnU-Net produce deep paths. Enable long paths
-  (`Computer\HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem\
-  LongPathsEnabled = 1`) or build somewhere near the drive root.
-* **Worker memory.** Under spawn, every worker loads its own copy of torch.
+* **Antivirus** flags freshly compiled binaries routinely; signing the
+  executable is the only real fix at distribution scale. Installer `.exe`s
+  (Inno Setup's included) get flagged too, sometimes more readily.
+* **`MAX_PATH`** -- torch and nnU-Net produce deep paths. Enable long paths
+  (`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1`)
+  or build near the drive root.
+* **Worker memory** -- every worker loads its own copy of torch under spawn;
   `--nproc 1 --nproc_export 2` is a good default on modest machines.
-* **Defender real-time scanning** roughly doubles Nuitka build times. Excluding
-  the build directory helps.
-* **"Matplotlib is building the font cache"** on the very first run ever
-  (nnU-Net pulls in matplotlib transitively). A few hundred ms to a couple of
-  seconds, and matplotlib caches the result in `%LOCALAPPDATA%\matplotlib`
-  itself after that -- every run after the first is unaffected, no code here
-  needed to change. Pre-building the cache at compile time and shipping it
-  would need its own writable, version-matched cache directory (the same
-  class of problem the weights and the onefile temp dir already solve), for
-  a one-time saving of at most a couple of seconds -- not worth the added
-  moving parts.
+* **Defender real-time scanning** roughly doubles Nuitka build times;
+  excluding the build directory helps.
+* **Icon cache** -- if you rebuild with a different `--icon` and Explorer
+  still shows the old one, that's Explorer's icon cache, not a build issue;
+  moving/renaming the file or logging off and back on forces a refresh.
