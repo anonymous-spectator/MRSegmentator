@@ -16,6 +16,8 @@
     .\windows\build.ps1 -Backend pyinstaller
     .\windows\build.ps1 -Cuda -Zip
     .\windows\build.ps1 -NoWeights
+    .\windows\build.ps1 -OneFile
+    .\windows\build.ps1 -OneFile -Icon my_logo.png
 #>
 
 [CmdletBinding()]
@@ -28,6 +30,14 @@ param(
 
     # Do not bundle weights (they are then downloaded on first run).
     [switch]$NoWeights,
+
+    # Single self-contained .exe (weights embedded) instead of a folder.
+    # See windows/README.md for the Nuitka-vs-PyInstaller tradeoff this makes.
+    [switch]$OneFile,
+
+    # Custom icon: a .ico, or any common image (.png/.jpg/.bmp -- converted
+    # automatically). Defaults to windows/icon.ico; pass '' for no icon.
+    [string]$Icon = '',
 
     # Also produce a distributable .zip.
     [switch]$Zip,
@@ -45,6 +55,8 @@ Write-Host "MRSegmentator Windows build" -ForegroundColor Cyan
 Write-Host "  repository : $repo"
 Write-Host "  backend    : $Backend"
 Write-Host "  torch      : $(if ($Cuda) { 'CUDA' } else { 'CPU only' })"
+Write-Host "  layout     : $(if ($OneFile) { 'single .exe (weights embedded)' } else { 'folder (weights\ next to the .exe)' })"
+Write-Host "  icon       : $(if ($Icon) { $Icon } else { 'windows\icon.ico (default)' })"
 
 if (-not $VenvPath) { $VenvPath = Join-Path $repo 'build\windows\venv' }
 
@@ -78,6 +90,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Installing the build backend failed' }
 
 $buildArgs = @((Join-Path $repo 'windows\build_windows_exe.py'), '--backend', $Backend)
 if ($NoWeights) { $buildArgs += '--no-weights' }
+if ($OneFile)   { $buildArgs += '--onefile' }
+# Only pass --icon when set: an empty default here must fall through to
+# build_windows_exe.py's own default (windows/icon.ico), not disable it.
+if ($Icon)      { $buildArgs += @('--icon', $Icon) }
 if ($Zip)       { $buildArgs += '--zip' }
 
 Write-Host "`n=== Building (this takes a while: 15-90 minutes)" -ForegroundColor Cyan

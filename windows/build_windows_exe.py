@@ -257,13 +257,44 @@ def write_manifest(modules: List[str], destination: Path) -> Path:
     return destination
 
 
+ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+
+
 def stage_icon(icon: Path, destination: Path) -> Path:
-    """Copy ``icon`` to a fixed filename so both backends embed it the same
-    way regardless of the source file's own name, and mrseg_gui.py can look
-    it up at runtime with a name it knows ahead of time (see
-    frozen_support.find_data_file("icon.ico"))."""
+    """Produce a proper multi-resolution ``.ico`` at a fixed filename, so
+    both backends embed it the same way regardless of the source file's own
+    name or format, and mrseg_gui.py can look it up at runtime with a name
+    it knows ahead of time (see frozen_support.find_data_file("icon.ico")).
+
+    ``icon`` may already be a ``.ico`` (copied as-is) or any image Pillow can
+    read (``.png``, ``.jpg``, ``.bmp``, ...), converted here -- a hand-drawn
+    logo does not need to be pre-converted to design your own icon.  A
+    non-square source is padded onto a transparent square first so it isn't
+    stretched.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(icon, destination)
+
+    if icon.suffix.lower() == ".ico":
+        shutil.copy2(icon, destination)
+        return destination
+
+    try:
+        from PIL import Image
+    except ImportError as error:
+        raise SystemExit(
+            f"--icon {icon} is not a .ico file, and Pillow is not installed to "
+            f"convert it (it normally comes in already, as a matplotlib "
+            f"dependency). Either supply a real .ico, or run: pip install pillow"
+        ) from error
+
+    image = Image.open(icon).convert("RGBA")
+    if image.width != image.height:
+        size = max(image.width, image.height)
+        square = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        square.paste(image, ((size - image.width) // 2, (size - image.height) // 2), image)
+        image = square
+
+    image.save(destination, format="ICO", sizes=ICO_SIZES)
     return destination
 
 
@@ -680,7 +711,8 @@ def parse_args() -> argparse.Namespace:
         "--icon",
         type=Path,
         default=DEFAULT_ICON if DEFAULT_ICON.is_file() else None,
-        help="custom .ico for the executable (default: windows/icon.ico); "
+        help="custom icon for the executable: a .ico, or any raster image "
+        "(.png/.jpg/.bmp/...) auto-converted to one (default: windows/icon.ico); "
         "pass an empty string to build without a custom icon",
     )
     parser.add_argument("--zip", action="store_true", help="also produce a distributable .zip")

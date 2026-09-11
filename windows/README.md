@@ -49,6 +49,18 @@ GUI (see below); from a terminal it behaves exactly like the pip installation:
 mrsegmentator.exe --input scan.nii.gz --outdir segmentations
 ```
 
+For a single self-contained `.exe` instead (weights embedded, your own icon),
+add `-OneFile` and/or `-Icon` — see [`--onefile`](#--onefile-a-single-exe-with-the-weights-baked-in)
+and [Icon](#icon) below for what each actually costs/needs before reaching for them:
+
+```powershell
+.\windows\build.ps1 -OneFile -Icon path\to\your_logo.png
+```
+
+`-Icon` accepts a `.ico` directly, or any common raster image
+(`.png`/`.jpg`/`.bmp`/...) — it gets converted to a proper multi-resolution
+`.ico` automatically, so a hand-designed logo doesn't need pre-converting.
+
 ## Graphical interface
 
 Starting `mrsegmentator.exe` with **no arguments at all** — what a
@@ -275,13 +287,28 @@ folder build, without any unpack cost at every launch.
 
 `windows/icon.ico` (a simple blue-to-teal rounded badge with a brain glyph,
 in the same colors as the GUI's own header/badges) is used automatically --
-`--icon` overrides it, or `--icon ""` builds without a custom icon. It sets
-the .exe's own file icon in both backends, and is separately bundled as a
-plain data file under the fixed name `icon.ico` so `mrseg_gui.py` can also
-set it as the actual window/taskbar icon at runtime
+`--icon PATH` (`-Icon PATH` in build.ps1) overrides it, or an empty string
+(`--icon ""` / `-Icon ''`, the PowerShell default) builds without a custom
+icon. It sets the .exe's own file icon in both backends, and is separately
+bundled as a plain data file under the fixed name `icon.ico` so
+`mrseg_gui.py` can also set it as the actual window/taskbar icon at runtime
 (`frozen_support.find_data_file("icon.ico")`) -- Tk does not inherit the
-hosting .exe's icon on its own. Swap in your own design by pointing `--icon`
-at any `.ico` file (multi-resolution, e.g. 16/32/48/256 px, recommended).
+hosting .exe's icon on its own.
+
+Swap in your own design by pointing `--icon` at it: a `.ico` is used as-is,
+and any other common raster format (`.png`, `.jpg`, `.bmp`, ...) is converted
+to a proper multi-resolution `.ico` automatically by `stage_icon()` (via
+Pillow, which is already installed as a `matplotlib` dependency, so nothing
+extra to install in the usual case) -- no pre-conversion needed for a
+hand-designed logo. A non-square source is padded onto a transparent square
+first so it isn't stretched. Not supported: vector formats like `.svg`
+(export a PNG from your design tool first).
+
+**Windows caches file icons.** If you rebuild with a different icon and
+Explorer still shows the old one on the `.exe`, that's the icon cache, not a
+build issue -- moving/renaming the file, or logging off and back on, forces
+a refresh. The window/taskbar icon the GUI itself sets at runtime is read
+fresh from the file on every launch and is not affected by this.
 
 ## GPU or CPU
 
