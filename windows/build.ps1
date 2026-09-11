@@ -16,6 +16,7 @@
     .\windows\build.ps1 -Backend pyinstaller
     .\windows\build.ps1 -Cuda -Zip
     .\windows\build.ps1 -NoWeights
+    .\windows\build.ps1 -NoDcmHelper
     .\windows\build.ps1 -OneFile
     .\windows\build.ps1 -OneFile -Icon my_logo.png
 #>
@@ -30,6 +31,9 @@ param(
 
     # Do not bundle weights (they are then downloaded on first run).
     [switch]$NoWeights,
+
+    # Only build mrsegmentator.exe; skip the dcm_helper.exe hard link.
+    [switch]$NoDcmHelper,
 
     # Single self-contained .exe (weights embedded) instead of a folder.
     # See windows/README.md for the Nuitka-vs-PyInstaller tradeoff this makes.
@@ -89,12 +93,13 @@ if ($Backend -eq 'nuitka') {
 if ($LASTEXITCODE -ne 0) { throw 'Installing the build backend failed' }
 
 $buildArgs = @((Join-Path $repo 'windows\build_windows_exe.py'), '--backend', $Backend)
-if ($NoWeights) { $buildArgs += '--no-weights' }
-if ($OneFile)   { $buildArgs += '--onefile' }
+if ($NoWeights)   { $buildArgs += '--no-weights' }
+if ($NoDcmHelper) { $buildArgs += '--no-dcm-helper' }
+if ($OneFile)     { $buildArgs += '--onefile' }
 # Only pass --icon when set: an empty default here must fall through to
 # build_windows_exe.py's own default (windows/icon.ico), not disable it.
-if ($Icon)      { $buildArgs += @('--icon', $Icon) }
-if ($Zip)       { $buildArgs += '--zip' }
+if ($Icon)        { $buildArgs += @('--icon', $Icon) }
+if ($Zip)         { $buildArgs += '--zip' }
 
 Write-Host "`n=== Building (this takes a while: 15-90 minutes)" -ForegroundColor Cyan
 & $venvPython @buildArgs

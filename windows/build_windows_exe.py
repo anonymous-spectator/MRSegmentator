@@ -266,27 +266,35 @@ def stage_icon(icon: Path, destination: Path) -> Path:
     name or format, and mrseg_gui.py can look it up at runtime with a name
     it knows ahead of time (see frozen_support.find_data_file("icon.ico")).
 
-    ``icon`` may already be a ``.ico`` (copied as-is) or any image Pillow can
-    read (``.png``, ``.jpg``, ``.bmp``, ...), converted here -- a hand-drawn
-    logo does not need to be pre-converted to design your own icon.  A
-    non-square source is padded onto a transparent square first so it isn't
-    stretched.
+    ``icon`` can be a ``.ico`` or any image Pillow can read (``.png``,
+    ``.jpg``, ``.bmp``, ...) -- a hand-drawn logo does not need to be
+    pre-converted to design your own icon. Always re-derived through Pillow
+    and re-exported at a fixed set of sizes, ``.ico`` inputs included: a
+    plain copy would trust the source file's own frames, and a non-square
+    single-frame ``.ico`` (common output from quick online "convert to ico"
+    tools, which resize instead of padding) would carry that distortion
+    straight through and show up visibly stretched once Windows displays it
+    in a square icon slot. A non-square source is padded onto a transparent
+    square first instead, so nothing gets stretched either way.
     """
     destination.parent.mkdir(parents=True, exist_ok=True)
-
-    if icon.suffix.lower() == ".ico":
-        shutil.copy2(icon, destination)
-        return destination
 
     try:
         from PIL import Image
     except ImportError as error:
+        if icon.suffix.lower() == ".ico":
+            # No Pillow: fall back to a plain copy, trusting the source is
+            # already a well-formed, square, multi-resolution .ico.
+            shutil.copy2(icon, destination)
+            return destination
         raise SystemExit(
             f"--icon {icon} is not a .ico file, and Pillow is not installed to "
             f"convert it (it normally comes in already, as a matplotlib "
             f"dependency). Either supply a real .ico, or run: pip install pillow"
         ) from error
 
+    # Pillow's ICO reader opens the largest frame in the file by default, so
+    # re-deriving from an already-multi-resolution .ico loses nothing.
     image = Image.open(icon).convert("RGBA")
     if image.width != image.height:
         size = max(image.width, image.height)
@@ -527,7 +535,12 @@ def copy_weights(dist: Path, staged_weights: Path) -> None:
 
 
 def write_readme(
-    dist: Path, with_weights: bool, backend: str, version: str, onefile: bool
+    dist: Path,
+    with_weights: bool,
+    backend: str,
+    version: str,
+    onefile: bool,
+    with_dcm_helper: bool,
 ) -> None:
     if not with_weights:
         weights_note = (
@@ -567,6 +580,13 @@ def write_readme(
         else "* Keep the whole folder together; the .exe needs the files next to it."
     )
 
+    dcm_helper_note = (
+        "DICOM conversion helper (same CLI as the `dcm_helper` console script):\n\n"
+        "    dcm_helper.exe --help\n\n"
+        if with_dcm_helper
+        else ""
+    )
+
     (dist / "README.txt").write_text(
         f"""{PRODUCT_NAME} {version} - Windows build ({backend})
 
@@ -585,11 +605,7 @@ All options of the pip installation are available:
 
     mrsegmentator.exe --help
 
-DICOM conversion helper (same CLI as the `dcm_helper` console script):
-
-    dcm_helper.exe --help
-
-Weights
+{dcm_helper_note}Weights
 -------
 {weights_note}
 
@@ -693,6 +709,12 @@ def parse_args() -> argparse.Namespace:
         help="do not ship weights; fall back to downloading at first run",
     )
     parser.add_argument(
+        "--no-dcm-helper",
+        dest="with_dcm_helper",
+        action="store_false",
+        help="only build mrsegmentator.exe; skip the dcm_helper.exe hard link",
+    )
+    parser.add_argument(
         "--models",
         nargs="+",
         default=sorted(registry),
@@ -756,6 +778,21 @@ def main() -> int:
     # (copy_weights(), below), same as before.
     embedded_weights = staged_weights if args.onefile else None
 
+    if embedded_weights is not None and args.backend == "pyinstaller":
+        size_gib = sum(f.stat().st_size for f in embedded_weights.rglob("*") if f.is_file())
+        size_gib /= 2**30
+        print(
+            f"\nWARNING: --onefile with --backend pyinstaller re-extracts the "
+            f"embedded weights (~{size_gib:.1f} GiB) to a temp folder on "
+            f"*every* launch, not just the first -- expect a real delay and "
+            f"noticeable CPU/disk use before the window appears, every single "
+            f"time. --backend nuitka caches its one-time unpack instead (much "
+            f"longer compile, near-instant launches after the first). If "
+            f"neither tradeoff is acceptable, drop --onefile and use --zip "
+            f"instead: a single archive to share, with no per-launch cost.\n",
+            file=sys.stderr,
+        )
+
     if args.skip_compile:
         info("Skipping compilation (--skip-compile)")
     else:
@@ -775,12 +812,20 @@ def main() -> int:
     executable = executable_path(dist)
     print(f"  executable: {executable}")
 
-    add_second_entry_point(dist, executable)
+    if args.with_dcm_helper:
+        add_second_entry_point(dist, executable)
 
     if staged_weights is not None and embedded_weights is None:
         copy_weights(dist, staged_weights)
 
-    write_readme(dist, staged_weights is not None, args.backend, version, args.onefile)
+    write_readme(
+        dist,
+        staged_weights is not None,
+        args.backend,
+        version,
+        args.onefile,
+        args.with_dcm_helper,
+    )
 
     ok = True
     if not args.skip_smoke_test:

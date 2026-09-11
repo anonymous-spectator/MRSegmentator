@@ -237,9 +237,10 @@ python windows\build_windows_exe.py [options]
   --onefile                        single, self-contained .exe (weights embedded)
                                     instead of a folder
   --no-weights                     do not ship weights
+  --no-dcm-helper                  only build mrsegmentator.exe, skip dcm_helper.exe
   --models base body_comp          which models to ship (default: both)
-  --icon PATH                      custom .ico (default: windows/icon.ico;
-                                    pass "" to build without a custom icon)
+  --icon PATH                      custom icon, .ico or any raster image (default:
+                                    windows/icon.ico; pass "" for no custom icon)
   --zip                            also produce a distributable archive
   --skip-compile                   re-package an existing build
   --jobs N                         parallel compile jobs (nuitka)
@@ -270,9 +271,14 @@ of them can cache it:
 * **PyInstaller** has no equivalent option: its onefile bootstrap always
   extracts to a fresh temp directory and deletes it on exit, so **every
   single launch** re-unpacks the whole multi-GB payload before the window
-  even appears. Bearable for a small onefile app; a real, repeated cost once
-  weights are embedded. If that matters more to you than Nuitka's longer
-  compile time, prefer the Nuitka backend for a onefile build.
+  even appears -- noticeably slower to open, and noticeably more CPU/disk
+  activity (decompressing multiple GB), every time, not just once. Bearable
+  for a small onefile app; a real, repeated cost once weights are embedded.
+  `build_windows_exe.py` prints a loud warning at build time whenever this
+  exact combination (`--onefile` + `--backend pyinstaller` + weights) is
+  chosen, so it's a decision rather than a surprise. If that cost matters
+  more to you than Nuitka's longer compile time, prefer the Nuitka backend
+  for a onefile build.
 
 `add_second_entry_point()` hard-links `dcm_helper.exe` to `mrsegmentator.exe`
 rather than copying it, so the two file names don't double the on-disk size
@@ -295,14 +301,21 @@ bundled as a plain data file under the fixed name `icon.ico` so
 (`frozen_support.find_data_file("icon.ico")`) -- Tk does not inherit the
 hosting .exe's icon on its own.
 
-Swap in your own design by pointing `--icon` at it: a `.ico` is used as-is,
-and any other common raster format (`.png`, `.jpg`, `.bmp`, ...) is converted
-to a proper multi-resolution `.ico` automatically by `stage_icon()` (via
-Pillow, which is already installed as a `matplotlib` dependency, so nothing
-extra to install in the usual case) -- no pre-conversion needed for a
-hand-designed logo. A non-square source is padded onto a transparent square
-first so it isn't stretched. Not supported: vector formats like `.svg`
-(export a PNG from your design tool first).
+Swap in your own design by pointing `--icon` at it: `stage_icon()` accepts a
+`.ico` or any other common raster format (`.png`, `.jpg`, `.bmp`, ...) --
+no pre-conversion needed for a hand-designed logo. Either way it is always
+re-derived through Pillow (already installed as a `matplotlib` dependency,
+so nothing extra to install in the usual case) and re-exported at a fixed
+set of sizes, `.ico` inputs included: a non-square *source* image gets
+padded onto a transparent square first rather than stretched to fit, and
+that matters for a `.ico` too -- a single non-square frame is a common
+result of quick "convert my logo to .ico" tools that resize instead of pad,
+and copying such a file as-is would carry the distortion straight through
+to a visibly stretched icon. (What re-deriving *can't* fix: a source image
+whose pixels are already distorted by an earlier lossy resize somewhere
+upstream -- start from an undistorted, ideally-square source for a clean
+result.) Not supported: vector formats like `.svg` (export a PNG from your
+design tool first).
 
 **Windows caches file icons.** If you rebuild with a different icon and
 Explorer still shows the old one on the `.exe`, that's the icon cache, not a
