@@ -27,7 +27,11 @@ them before ``mrsegmentator.main.main()`` is called.
    frozen build has no ``.py`` files to walk, so the lookup silently returns
    ``None`` and inference dies with "Could not find trainer class".  We install
    a post-import hook that replaces the function with one that resolves names
-   against a manifest of module names recorded at build time.
+   against a manifest of module names recorded at build time.  Its signature
+   has also grown a 4th positional ``base_folder`` plus keyword-only
+   ``verbose``/``cleanup_imports_from_base_folder`` in some nnU-Net versions,
+   so the replacement takes ``*args, **kwargs`` rather than hard-coding one
+   arity (see ``_find_class_call_args``).
 
 3. **multiprocessing.**  Handled in ``mrseg_entry.py`` (``freeze_support()``),
    but note that spawned children re-enter that entry point, so the hook from
@@ -243,6 +247,25 @@ def _modules_under(package: str) -> Iterable[str]:
             yield name
 
 
+def _find_class_call_args(args: tuple, kwargs: dict) -> tuple:
+    """Pull ``class_name`` and ``current_module`` out of a call meant for
+    nnU-Net's ``recursive_find_python_class``.
+
+    Its signature has grown across nnU-Net versions -- 2.2.1 takes exactly
+    ``(folder, class_name, current_module)``; 2.8.0 adds a 4th positional
+    ``base_folder`` plus keyword-only ``verbose`` and
+    ``cleanup_imports_from_base_folder``, and some call sites pass
+    ``current_module`` by keyword instead of positionally. Only ``class_name``
+    and ``current_module`` matter for the manifest-based fallback below, so
+    accepting ``*args, **kwargs`` and picking those two out (positional if
+    present, keyword otherwise) keeps this a drop-in replacement regardless of
+    which signature the installed nnU-Net actually uses.
+    """
+    class_name = args[1] if len(args) > 1 else kwargs.get("class_name")
+    current_module = args[2] if len(args) > 2 else kwargs.get("current_module")
+    return class_name, current_module
+
+
 def _make_patched_finder(original: Optional[Callable[..., Any]]) -> Callable[..., Any]:
     """Build a drop-in replacement for ``recursive_find_python_class``.
 
@@ -251,14 +274,22 @@ def _make_patched_finder(original: Optional[Callable[..., Any]]) -> Callable[...
     comes up empty do we resolve the name against the build-time manifest.
     """
 
-    def recursive_find_python_class(folder: str, class_name: str, current_module: str) -> Any:
+    def recursive_find_python_class(*args: Any, **kwargs: Any) -> Any:
         if original is not None:
             try:
-                found = original(folder, class_name, current_module)
+                found = original(*args, **kwargs)
                 if found is not None:
                     return found
             except Exception as error:  # frozen builds: folder does not exist
-                _debug(f"original lookup for {class_name} failed: {error}")
+                _debug(f"original lookup failed: {error}")
+
+        class_name, current_module = _find_class_call_args(args, kwargs)
+        if class_name is None or current_module is None:
+            _debug(
+                f"cannot resolve without class_name/current_module (args={args!r}, "
+                f"kwargs={kwargs!r})"
+            )
+            return None
 
         for module_name in _modules_under(current_module):
             try:

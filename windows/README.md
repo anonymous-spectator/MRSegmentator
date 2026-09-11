@@ -71,9 +71,13 @@ the same CLI, invoked as a subprocess per selected input with a fixed
   parsed out of the current line drives the progress bar. **Cancel** stops
   after the current file.
 
-The header names the project, notes that this is a CPU-friendly light mode
-(single fold, fast settings), and links to the codebase and both papers —
-opened with the system's default browser via `webbrowser.open()`.
+The header sits on its own tinted panel: the project name and subtitle, a
+short note that this is a CPU-friendly light mode (single fold, fast
+settings), and three colored, rounded badge links to the codebase and both
+papers — styled like a shields.io/GitHub README badge, each opened with the
+system's default browser via `webbrowser.open()`. The badges are drawn on a
+plain `tk.Canvas` (rounded-rect polygon + centered text) since neither
+`tk` nor `ttk` has a built-in rounded button.
 
 Nothing under `src/` is touched by the GUI either, and it adds no new
 dependency: it's built entirely on `tkinter`, which ships with Python.
@@ -175,6 +179,18 @@ reasons: call sites do `from ... import recursive_find_python_class`, binding
 the function *by value* at their own import time, so patching has to happen
 before they load; and the hook itself imports nothing, which preserves the
 deferred-import trick in `main.py` that keeps `--help` fast.
+
+`recursive_find_python_class()`'s own signature has grown across nnU-Net
+versions — the package range in `setup.cfg` (`nnunetv2>=2.2.1,<=2.8.0`) spans
+both a plain `(folder, class_name, current_module)` and, since a later
+release, a 4th positional `base_folder` plus keyword-only `verbose` and
+`cleanup_imports_from_base_folder` used by the external-trainer-path fallback.
+The replacement therefore takes `*args, **kwargs` and only ever reads out
+`class_name` and `current_module` (positional or keyword, whichever the
+call site used) — it stays a drop-in regardless of which signature the
+installed nnU-Net actually has, instead of hard-coding one arity and breaking
+on the other with `TypeError: ... takes N positional arguments but M were
+given`.
 
 ### 3. multiprocessing
 

@@ -38,7 +38,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 WINDOWS_DIR = Path(__file__).resolve().parent
 ENTRY_SCRIPT = WINDOWS_DIR / "mrseg_entry.py"
@@ -53,18 +53,25 @@ MAX_LOG_LINES = 4000
 # simplified GUI, not the CLI.
 PRODUCT_NAME = "MRSegmentator"
 SUBTITLE = "Multi-Modality Segmentation of 40+10 Classes"
-LIGHT_MODE_NOTE = (
-    "⚡ CPU-friendly light mode: single fold, fast settings for quick results."
-)
-LINKS: List[Tuple[str, str]] = [
-    ("Codebase", "https://github.com/hhaentze/MRSegmentator"),
-    ("Main Paper", "https://pubs.rsna.org/doi/abs/10.1148/ryai.240777"),
-    ("Bodycomp Paper", "https://www.nature.com/articles/s43856-026-01888-w"),
+LIGHT_MODE_NOTE = "⚡ CPU-friendly light mode: single fold, fast settings for quick results."
+
+# (label, url, fill color, hover color) -- one shields.io-style badge each.
+BADGES: List[Tuple[str, str, str, str]] = [
+    ("Codebase", "https://github.com/hhaentze/MRSegmentator", "#24292f", "#3a4149"),
+    ("Main Paper", "https://pubs.rsna.org/doi/abs/10.1148/ryai.240777", "#1a73e8", "#0b57c7"),
+    (
+        "Bodycomp Paper",
+        "https://www.nature.com/articles/s43856-026-01888-w",
+        "#0f9d76",
+        "#0c7d5e",
+    ),
 ]
-LINK_COLOR = "#1a73e8"
-LINK_HOVER_COLOR = "#0b3d91"
+
+HEADER_BG = "#eef3fc"
+TITLE_COLOR = "#1f3a5f"
+ACCENT_COLOR = "#b4530f"
 MUTED_COLOR = "#666666"
-SEPARATOR_COLOR = "#aaaaaa"
+BADGE_TEXT_COLOR = "#ffffff"
 
 
 def _is_frozen() -> bool:
@@ -93,16 +100,73 @@ def _display_name(path: str) -> str:
     return p.name if p.name else path
 
 
-def _make_link(parent: tk.Widget, text: str, url: str) -> ttk.Label:
-    """A clickable, underlined label that opens ``url`` in the default browser."""
-    label = ttk.Label(parent, text=text, foreground=LINK_COLOR, cursor="hand2")
-    underline_font = tkfont.Font(font=label.cget("font"))
-    underline_font.configure(underline=True)
-    label.configure(font=underline_font)
-    label.bind("<Button-1>", lambda _event: webbrowser.open(url))
-    label.bind("<Enter>", lambda _event: label.configure(foreground=LINK_HOVER_COLOR))
-    label.bind("<Leave>", lambda _event: label.configure(foreground=LINK_COLOR))
-    return label
+class _Badge(tk.Canvas):
+    """A small clickable, rounded, colored link -- shields.io-badge style.
+
+    Tk/ttk have no built-in rounded button, so this draws one: a rounded-rect
+    polygon plus centered text on a Canvas sized to fit that text, redrawn in
+    a slightly darker shade on hover. ``parent_bg`` must match the surrounding
+    widget's actual background so the canvas's own (necessarily rectangular)
+    corners are invisible against it.
+    """
+
+    _PAD_X = 14
+    _PAD_Y = 6
+
+    def __init__(
+        self, parent: tk.Widget, text: str, url: str, fill: str, hover_fill: str, parent_bg: str
+    ) -> None:
+        self._font = tkfont.Font(family="Segoe UI", size=9, weight="bold")
+        width = self._font.measure(text) + 2 * self._PAD_X
+        height = self._font.metrics("linespace") + 2 * self._PAD_Y
+        super().__init__(
+            parent,
+            width=width,
+            height=height,
+            highlightthickness=0,
+            bd=0,
+            bg=parent_bg,
+            cursor="hand2",
+        )
+        self._text = text
+        self._url = url
+        self._fill = fill
+        self._hover_fill = hover_fill
+        self._width = width
+        self._height = height
+        self._paint(fill)
+        self.bind("<Button-1>", lambda _event: webbrowser.open(self._url))
+        self.bind("<Enter>", lambda _event: self._paint(self._hover_fill))
+        self.bind("<Leave>", lambda _event: self._paint(self._fill))
+
+    def _paint(self, color: str) -> None:
+        self.delete("all")
+        radius = self._height / 2
+        self._rounded_rect(0, 0, self._width, self._height, radius, fill=color, outline=color)
+        self.create_text(
+            self._width / 2,
+            self._height / 2,
+            text=self._text,
+            fill=BADGE_TEXT_COLOR,
+            font=self._font,
+        )
+
+    def _rounded_rect(self, x1: float, y1: float, x2: float, y2: float, r: float, **opts: Any) -> int:
+        points = [
+            x1 + r, y1,
+            x2 - r, y1,
+            x2, y1,
+            x2, y1 + r,
+            x2, y2 - r,
+            x2, y2,
+            x2 - r, y2,
+            x1 + r, y2,
+            x1, y2,
+            x1, y2 - r,
+            x1, y1 + r,
+            x1, y1,
+        ]
+        return self.create_polygon(points, smooth=True, **opts)
 
 
 class _Job:
@@ -143,31 +207,49 @@ class MRSegGUI:
         root = self.root
         root.columnconfigure(0, weight=1)
 
-        # --- Header: title, light-mode note, links --------------------------
-        header = ttk.Frame(root)
-        header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
-        header.columnconfigure(0, weight=1)
-
-        title_row = ttk.Frame(header)
-        title_row.grid(row=0, column=0, sticky="w")
-        title_font = tkfont.Font(family="Segoe UI", size=15, weight="bold")
-        ttk.Label(title_row, text=PRODUCT_NAME, font=title_font).pack(side="left")
-        ttk.Label(title_row, text=f"   {SUBTITLE}", foreground=MUTED_COLOR).pack(side="left")
-
-        ttk.Label(header, text=LIGHT_MODE_NOTE, foreground=MUTED_COLOR).grid(
-            row=1, column=0, sticky="w", pady=(2, 4)
+        # Frame/Label backgrounds are honored on every built-in ttk theme
+        # (unlike Button/Entry, which mostly ignore custom colors on Windows'
+        # native theme), so a couple of named styles are enough to give the
+        # header its own tinted panel without touching the rest of the app.
+        style = ttk.Style(root)
+        style.configure("Header.TFrame", background=HEADER_BG)
+        style.configure("Header.TLabel", background=HEADER_BG)
+        style.configure(
+            "Title.Header.TLabel", background=HEADER_BG, foreground=TITLE_COLOR
+        )
+        style.configure(
+            "Subtitle.Header.TLabel", background=HEADER_BG, foreground=MUTED_COLOR
+        )
+        style.configure(
+            "Note.Header.TLabel", background=HEADER_BG, foreground=ACCENT_COLOR
         )
 
-        links_row = ttk.Frame(header)
-        links_row.grid(row=2, column=0, sticky="w", pady=(0, 6))
-        for index, (text, url) in enumerate(LINKS):
-            if index:
-                ttk.Label(links_row, text="   ·   ", foreground=SEPARATOR_COLOR).pack(
-                    side="left"
-                )
-            _make_link(links_row, text, url).pack(side="left")
+        # --- Header: title, light-mode note, badge links ---------------------
+        header = ttk.Frame(root, style="Header.TFrame")
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(0, weight=1)
 
-        ttk.Separator(header, orient="horizontal").grid(row=3, column=0, sticky="ew", pady=(2, 0))
+        title_row = ttk.Frame(header, style="Header.TFrame")
+        title_row.grid(row=0, column=0, sticky="w", padx=14, pady=(12, 0))
+        title_font = tkfont.Font(family="Segoe UI", size=16, weight="bold")
+        ttk.Label(
+            title_row, text=PRODUCT_NAME, font=title_font, style="Title.Header.TLabel"
+        ).pack(side="left")
+        ttk.Label(
+            title_row, text=f"   {SUBTITLE}", style="Subtitle.Header.TLabel"
+        ).pack(side="left")
+
+        ttk.Label(header, text=LIGHT_MODE_NOTE, style="Note.Header.TLabel").grid(
+            row=1, column=0, sticky="w", padx=14, pady=(2, 8)
+        )
+
+        badges_row = ttk.Frame(header, style="Header.TFrame")
+        badges_row.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 12))
+        for text, url, fill, hover_fill in BADGES:
+            badge = _Badge(badges_row, text, url, fill, hover_fill, parent_bg=HEADER_BG)
+            badge.pack(side="left", padx=(0, 8))
+
+        ttk.Separator(header, orient="horizontal").grid(row=3, column=0, sticky="ew")
 
         # --- Inputs -----------------------------------------------------
         input_frame = ttk.LabelFrame(root, text="Input images")
