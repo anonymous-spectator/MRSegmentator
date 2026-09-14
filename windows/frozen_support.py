@@ -9,8 +9,9 @@ Nuitka / PyInstaller compile.  A regular ``pip install mrsegmentator`` never
 sees it, and nothing under ``src/`` is modified or monkeypatched away from its
 documented behaviour.
 
-Three things break when this application is frozen; this module fixes all of
-them before ``mrsegmentator.main.main()`` is called.
+Several things break when this application is frozen (or, for (5) below,
+just on certain Windows machines regardless); this module fixes all of them
+before ``mrsegmentator.main.main()`` is called.
 
 1. **Weights.**  ``config._resolve_root()`` looks at ``MRSEG_WEIGHTS_PATH``
    first and falls back to ``~/.mrsegmentator`` (downloading on demand).  The
@@ -48,6 +49,16 @@ them before ``mrsegmentator.main.main()`` is called.
    tool.  The Nuitka backend gets the same behaviour for free from
    ``--windows-console-mode=attach``, before Python even starts, which makes
    this a safe no-op there.
+
+5. **``hostname`` decoding.**  ``nnunetv2.configuration`` shells out to
+   ``hostname`` at import time and decodes the result with Python's default
+   locale encoding; on some Windows machines the console's OEM code page
+   differs from that encoding and a hostname containing certain bytes
+   crashes with ``UnicodeDecodeError`` before inference can even start. Not
+   actually specific to freezing, but nothing else in the pip installation's
+   own code path hits it first the way this build does -- setting
+   ``nnUNet_n_proc_DA`` (nnU-Net's own documented override) skips the
+   lookup entirely; see ``avoid_hostname_lookup_crash()``.
 """
 
 import importlib
@@ -228,6 +239,26 @@ def silence_nnunet_path_warnings() -> None:
     for var in ("nnUNet_raw", "nnUNet_preprocessed", "nnUNet_results"):
         if os.environ.get(var) is None:
             os.environ[var] = "empty"
+
+
+def avoid_hostname_lookup_crash() -> None:
+    """Stop ``nnunetv2.configuration`` from shelling out to ``hostname``.
+
+    ``get_allowed_n_proc_DA()`` (in ``nnunetv2/utilities/default_n_proc_DA.py``,
+    run at ``nnunetv2.configuration`` import time) calls
+    ``subprocess.getoutput(['hostname'])`` and decodes the result as text using
+    Python's default locale encoding. On some Windows machines the console's
+    OEM code page (what ``hostname`` actually writes) differs from that
+    encoding, and a hostname containing certain bytes crashes with
+    ``UnicodeDecodeError`` before inference can even start -- entirely
+    independent of anything in this build, and unrelated to freezing as such,
+    but nnU-Net itself documents the fix: the ``nnUNet_n_proc_DA`` environment
+    variable overrides the lookup outright. ``12`` reproduces nnU-Net's own
+    fallback for an unrecognised hostname (its default branch, further capped
+    by ``os.cpu_count()`` either way) -- this only removes the crash-prone
+    hostname lookup, not the sizing behaviour. An existing value always wins.
+    """
+    os.environ.setdefault("nnUNet_n_proc_DA", "12")
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +637,7 @@ def install_weights() -> int:
 def bootstrap() -> Dict[str, Any]:
     """Prepare the frozen environment.  Cheap: no torch/nnU-Net import here."""
     silence_nnunet_path_warnings()
+    avoid_hostname_lookup_crash()
     weights = configure_weights_dir()
     install_nnunet_import_patch()
     return {"weights_dir": weights, "frozen": is_frozen()}

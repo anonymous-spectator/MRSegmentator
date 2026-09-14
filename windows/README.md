@@ -189,6 +189,13 @@ Freezing this application needed four fixes, all in `frozen_support.py`:
    `multiprocessing.freeze_support()` first, *after* installing the hook from
    (2), since spawned workers re-enter the entry point too.
 4. **Console vs. GUI dispatch** -- see [Graphical interface](#graphical-interface).
+5. **`hostname` decoding** -- `nnunetv2.configuration` shells out to
+   `hostname` at import time and decodes the result with Python's default
+   locale encoding; on some Windows machines the console's OEM code page
+   differs from that, and a hostname with certain bytes crashes with
+   `UnicodeDecodeError` before inference can start. Not actually specific to
+   freezing, but this is where it's hit first. `nnUNet_n_proc_DA` (nnU-Net's
+   own documented override) is set to skip the lookup entirely.
 
 Run with `MRSEG_FROZEN_DEBUG=1` set to see which weights directory, manifest
 and dynamic lookups this machinery actually used.
