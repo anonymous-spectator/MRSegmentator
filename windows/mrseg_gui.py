@@ -11,11 +11,12 @@ executable behaves exactly like the pip installation instead; this module is
 never imported on that path.
 
 The GUI itself never touches inference code. Each run is simply the same CLI
-the pip installation exposes, invoked as a subprocess with a fixed
-``--fast --split_level 1`` and the model the user picked:
+the pip installation exposes, invoked as a subprocess with the model and
+options the user picked -- fast mode and split level 1 are pre-selected
+defaults, not hard-coded:
 
     mrsegmentator.exe --input <file-or-folder> --outdir <dir> --fast
-                       --split_level 1 [--body_comp]
+                       --split_level {0,1,2} [--body_comp]
 
 Running it out-of-process rather than importing ``mrsegmentator.main``
 directly keeps this file lightweight (no torch/nnU-Net import here, so the
@@ -214,6 +215,8 @@ class MRSegGUI:
         self._running = False
 
         self.model_var = tk.StringVar(value="base")
+        self.split_level_var = tk.StringVar(value="1")
+        self.fast_var = tk.BooleanVar(value=True)
         self.outdir_var = tk.StringVar(value="")
         self.overall_status_var = tk.StringVar(value="Idle")
         self.current_status_var = tk.StringVar(value="")
@@ -324,7 +327,7 @@ class MRSegGUI:
             row=0, column=2, padx=(0, 8), pady=8
         )
 
-        # --- Model + fixed settings ---------------------------------------
+        # --- Model -----------------------------------------------------
         model_frame = ttk.LabelFrame(root, text="Model")
         model_frame.grid(row=3, column=0, sticky="ew", **pad)
         ttk.Radiobutton(
@@ -333,15 +336,24 @@ class MRSegGUI:
         ttk.Radiobutton(
             model_frame, text="Body composition", variable=self.model_var, value="body_comp"
         ).pack(side="left", padx=8, pady=6)
-        ttk.Label(
-            model_frame,
-            text="Every run uses --fast and --split_level 1.",
-            foreground="#666666",
-        ).pack(side="left", padx=16)
+
+        # --- Options -----------------------------------------------------
+        options_frame = ttk.LabelFrame(root, text="Options")
+        options_frame.grid(row=4, column=0, sticky="ew", **pad)
+
+        ttk.Checkbutton(
+            options_frame, text="Fast mode (default)", variable=self.fast_var
+        ).pack(side="left", padx=8, pady=6)
+
+        ttk.Label(options_frame, text="Split level:").pack(side="left", padx=(16, 4))
+        for value, label in (("0", "0"), ("1", "1 (default)"), ("2", "2")):
+            ttk.Radiobutton(
+                options_frame, text=label, variable=self.split_level_var, value=value
+            ).pack(side="left", padx=4, pady=6)
 
         # --- Run controls ---------------------------------------------------
         run_frame = ttk.Frame(root)
-        run_frame.grid(row=4, column=0, sticky="ew", **pad)
+        run_frame.grid(row=5, column=0, sticky="ew", **pad)
         run_frame.columnconfigure(0, weight=1)
 
         self.run_button = ttk.Button(run_frame, text="Run", command=self._on_run)
@@ -356,7 +368,7 @@ class MRSegGUI:
 
         # --- Progress ---------------------------------------------------
         progress_frame = ttk.Frame(root)
-        progress_frame.grid(row=5, column=0, sticky="ew", **pad)
+        progress_frame.grid(row=6, column=0, sticky="ew", **pad)
         progress_frame.columnconfigure(0, weight=1)
 
         self.overall_progress = ttk.Progressbar(
@@ -374,10 +386,10 @@ class MRSegGUI:
 
         # --- Log ----------------------------------------------------------
         log_frame = ttk.LabelFrame(root, text="Log")
-        log_frame.grid(row=6, column=0, sticky="nsew", **pad)
+        log_frame.grid(row=7, column=0, sticky="nsew", **pad)
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
-        root.rowconfigure(6, weight=2)
+        root.rowconfigure(7, weight=2)
 
         self.log_text = ScrolledText(log_frame, height=12, state="disabled", wrap="none")
         self.log_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
@@ -461,8 +473,10 @@ class MRSegGUI:
 
         jobs = list(self._jobs)
         model = self.model_var.get()
+        split_level = self.split_level_var.get()
+        fast = self.fast_var.get()
         self._worker = threading.Thread(
-            target=self._run_batch, args=(jobs, outdir, model), daemon=True
+            target=self._run_batch, args=(jobs, outdir, model, split_level, fast), daemon=True
         )
         self._worker.start()
 
@@ -490,7 +504,9 @@ class MRSegGUI:
     # ------------------------------------------------------------------
     # Worker thread: runs the unmodified CLI once per job, sequentially
     # ------------------------------------------------------------------
-    def _run_batch(self, jobs: List[_Job], outdir: str, model: str) -> None:
+    def _run_batch(
+        self, jobs: List[_Job], outdir: str, model: str, split_level: str, fast: bool
+    ) -> None:
         total = len(jobs)
         succeeded = 0
         failed: List[str] = []
@@ -503,7 +519,9 @@ class MRSegGUI:
             self._queue.put(("overall", (index - 1, total, job.name)))
             self._queue.put(("current_reset", job.name))
 
-            args = ["--input", job.path, "--outdir", outdir, "--fast", "--split_level", "1"]
+            args = ["--input", job.path, "--outdir", outdir, "--split_level", split_level]
+            if fast:
+                args.append("--fast")
             if model == "body_comp":
                 args.append("--body_comp")
 

@@ -72,11 +72,13 @@ double-click in Explorer always does -- opens a simplified GUI
 real argument still takes the normal CLI path untouched.
 
 The GUI never calls into inference code directly: each run is the same CLI,
-invoked as a subprocess with a fixed `--fast --split_level 1`. It adds one
-input picker (files or a folder, DICOM included), an output directory, a
-Base/Body-composition model choice, and a log pane with a progress bar parsed
-from the CLI's own tqdm output. It's built entirely on `tkinter` (ships with
-Python), so nothing under `src/` is touched and no new dependency is added.
+invoked as a subprocess with whatever the user picked. It adds one input
+picker (files or a folder, DICOM included), an output directory, a
+Base/Body-composition model choice, fast mode and split level options
+(fast mode and split level 1 pre-selected, matching the CLI's own
+recommended defaults), and a log pane with a progress bar parsed from the
+CLI's own tqdm output. It's built entirely on `tkinter` (ships with Python),
+so nothing under `src/` is touched and no new dependency is added.
 
 A CLI tool and a windowed GUI normally need different Windows "subsystems".
 `--windows-console-mode=attach` (Nuitka) and the `--windowed` build +

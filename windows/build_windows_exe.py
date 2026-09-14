@@ -595,8 +595,9 @@ def write_readme(
 Usage
 -----
 Double-click mrsegmentator.exe for a simplified GUI: add one or more input
-files or folders, pick an output directory and a model (base or body
-composition), and click Run. GUI runs always use --fast --split_level 1.
+files or folders, pick an output directory, a model (base or body
+composition), fast mode and a split level (fast mode and split level 1 are
+pre-selected), and click Run.
 
 For the full command-line interface, open a terminal (cmd or PowerShell) in
 this folder and run it with arguments instead, e.g.:
