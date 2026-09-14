@@ -101,7 +101,11 @@ def attach_console_if_present() -> None:
     corresponding ``sys.std*`` as ``None``. Only in that situation do we look
     for a console-owning parent process, attach to it, and repoint the
     missing streams there -- before anything else runs, since this has to
-    happen before argparse can print so much as ``--help``.
+    happen before argparse can print so much as ``--help``. If there is no
+    parent console either (e.g. launched by Inno Setup's ``[Run]`` step),
+    any stream still ``None`` afterwards is pointed at ``os.devnull`` instead
+    -- leaving it ``None`` would crash the first thing that writes to it
+    (tqdm's progress bar included), rather than just producing no output.
 
     Deliberately does **not** touch a stream that is already usable: both a
     real terminal invocation (Nuitka's ``--windows-console-mode=attach``
@@ -122,18 +126,30 @@ def attach_console_if_present() -> None:
 
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         attach_parent_process = -1
-        if not kernel32.AttachConsole(attach_parent_process):
-            return
-
-        if sys.stdout is None:
-            sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
-        if sys.stderr is None:
-            sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
-        if sys.stdin is None:
-            sys.stdin = open("CONIN$", "r", encoding="utf-8", errors="replace")
-        _debug("attached to parent console")
+        if kernel32.AttachConsole(attach_parent_process):
+            if sys.stdout is None:
+                sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+            if sys.stderr is None:
+                sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+            if sys.stdin is None:
+                sys.stdin = open("CONIN$", "r", encoding="utf-8", errors="replace")
+            _debug("attached to parent console")
     except Exception as error:  # pragma: no cover - defensive
         _debug(f"console attach skipped: {error}")
+
+    # No console to attach to either (e.g. launched by Inno Setup's [Run]
+    # step, which has none of its own) -- sys.std* are still None at this
+    # point. Leaving them that way is a landmine: anything that writes to
+    # them (tqdm's progress bar in config._download_model(), not just a
+    # stray print()) crashes with "'NoneType' object has no attribute
+    # 'write'" instead of the download just proceeding silently. Devnull
+    # streams keep every such call a harmless no-op.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+    if sys.stdin is None:
+        sys.stdin = open(os.devnull, "r")
 
 
 def app_dir() -> Path:
