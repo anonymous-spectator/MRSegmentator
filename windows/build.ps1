@@ -53,7 +53,9 @@ param(
     # or on PATH.
     [string]$Iscc = '',
 
-    # Reuse an existing virtual environment instead of creating one.
+    # Reuse an existing virtual environment instead of creating one -- only
+    # actually reused if it was built from the same -Python; otherwise it is
+    # recreated automatically (see below).
     [string]$VenvPath = '',
 
     [string]$Python = 'py -3.11'
@@ -72,9 +74,35 @@ Write-Host "  installer  : $(if ($Installer) { 'yes (Inno Setup)' } else { 'no' 
 
 if (-not $VenvPath) { $VenvPath = Join-Path $repo 'build\windows\venv' }
 
+# -Python may be a launcher command ("py -3.11"), not a direct path, so
+# resolve it to the actual interpreter it runs -- that's what gets compared
+# below to decide whether an existing venv still matches what was asked for.
+$resolvedPython = (Invoke-Expression "$Python -c `"import sys; print(sys.executable)`"").Trim()
+$pythonMarker = Join-Path $VenvPath '.mrseg-build-python'
+
+if (Test-Path $VenvPath) {
+    $previousPython = if (Test-Path $pythonMarker) { (Get-Content $pythonMarker -Raw).Trim() } else { $null }
+    if ($previousPython -ne $resolvedPython) {
+        # Without this check, an existing venv is reused unconditionally --
+        # silently keeping whatever interpreter it was originally created
+        # from even after -Python is changed to point somewhere else. That
+        # interpreter is baked into the venv's own DLLs (python3.dll etc.),
+        # so a stale conda/miniforge-based venv is exactly what makes "I
+        # switched to a non-conda Python" appear to have no effect, and
+        # both Nuitka and PyInstaller inherit whatever DLL mismatch that
+        # interpreter carries into the compiled .exe.
+        Write-Host "`n=== Existing venv at $VenvPath was built from a different Python" -ForegroundColor Yellow
+        Write-Host "    previous : $previousPython"
+        Write-Host "    requested: $resolvedPython"
+        Write-Host "    Recreating it (this venv is throwaway; nothing outside build\ is touched)."
+        Remove-Item -Recurse -Force $VenvPath
+    }
+}
+
 if (-not (Test-Path $VenvPath)) {
     Write-Host "`n=== Creating virtual environment at $VenvPath" -ForegroundColor Cyan
     Invoke-Expression "$Python -m venv `"$VenvPath`""
+    Set-Content -Path $pythonMarker -Value $resolvedPython -NoNewline
 }
 
 $venvPython = Join-Path $VenvPath 'Scripts\python.exe'

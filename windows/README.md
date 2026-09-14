@@ -250,3 +250,8 @@ everything.
   `build_windows_exe.py` detects this and warns loudly; the fix is to build
   with an official python.org CPython 3.10-3.13 instead (`py -3.11`, which
   is `build.ps1`'s default -- don't pass `-Python` at a conda interpreter).
+  `build.ps1` also remembers which interpreter its venv (`build\windows\venv`
+  by default) was created from and recreates it automatically when `-Python`
+  changes, so switching away from a conda interpreter can't silently keep
+  using a venv built from the old one -- rebuild once after upgrading to get
+  that check.
