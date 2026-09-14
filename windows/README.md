@@ -101,7 +101,10 @@ and `installer.iss` runs `mrsegmentator.exe --mrseg-install-weights` as its
 last step, which:
 
 * downloads each model's weights straight into `<install dir>\weights` (a few
-  GB, needs internet, shown as a status message during install);
+  GB, needs internet) with a small Tk progress window of its own -- this step
+  has no console at all to print tqdm's usual progress bar to, and a
+  multi-GB download with zero visible feedback looks exactly like a frozen
+  installer, so `install_weights()` reports into that window instead;
 * skips any model that's already there and current -- re-running the
   installer (e.g. while iterating on it locally) does not re-download;
 * moves weights already sitting in `~/.mrsegmentator` (e.g. from local

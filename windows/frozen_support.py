@@ -430,6 +430,86 @@ def install_nnunet_import_patch() -> None:
 # ---------------------------------------------------------------------------
 # One-time weight installation (called by the Inno Setup installer)
 # ---------------------------------------------------------------------------
+def _run_with_progress_window(events: Any, worker: Callable[[], None]) -> None:
+    """Run ``worker`` in a background thread while a small Tk window shows
+    ``events`` from it.
+
+    The installer's ``[Run]`` step (see ``attach_console_if_present()``) has
+    no console at all, so tqdm's usual progress bar goes to ``os.devnull``
+    -- invisible, and a multi-GB download can otherwise look exactly like a
+    frozen installer for minutes at a time. A Tk window works with no
+    console and needs no new dependency: ``mrseg_gui.py`` already requires
+    Tk to be present in this build.
+
+    Falls back to just calling ``worker()`` with no UI if Tk is unavailable
+    for any reason (should not normally happen).
+    """
+    import queue
+    import threading
+
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+    except Exception as error:  # pragma: no cover - defensive
+        _debug(f"no Tk for progress window ({error}), installing silently")
+        worker()
+        return
+
+    root = tk.Tk()
+    root.title("MRSegmentator Setup")
+    root.resizable(False, False)
+    root.attributes("-topmost", True)
+
+    status_var = tk.StringVar(value="Preparing to download model weights...")
+    tk.Label(root, textvariable=status_var, anchor="w", padx=12).pack(fill="x", pady=(14, 4))
+
+    bar = ttk.Progressbar(root, mode="indeterminate", length=380)
+    bar.pack(padx=12, pady=4)
+    bar.start(15)
+
+    detail_var = tk.StringVar(value="")
+    tk.Label(root, textvariable=detail_var, anchor="w", padx=12, fg="gray").pack(
+        fill="x", pady=(0, 14)
+    )
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    def poll() -> None:
+        try:
+            while True:
+                event = events.get_nowait()
+                kind = event[0]
+                if kind == "status":
+                    status_var.set(event[1])
+                    detail_var.set("")
+                elif kind == "start":
+                    _, desc, total = event
+                    status_var.set(f"Downloading {desc}...")
+                    if total:
+                        bar.stop()
+                        bar.config(mode="determinate", maximum=total)
+                        bar["value"] = 0
+                    else:
+                        bar.config(mode="indeterminate")
+                        bar.start(15)
+                elif kind == "progress":
+                    _, _desc, n, total = event
+                    if total:
+                        bar["value"] = n
+                        detail_var.set(f"{n / 2**20:.0f} / {total / 2**20:.0f} MiB")
+                elif kind == "finished":
+                    root.after(150, root.destroy)
+                    return
+        except queue.Empty:
+            pass
+        root.after(100, poll)
+
+    root.after(100, poll)
+    root.mainloop()
+    thread.join()
+
+
 def install_weights() -> int:
     """Get every registered model's weights into ``<app_dir>/weights``.
 
@@ -444,7 +524,13 @@ def install_weights() -> int:
     expected version. Weights already sitting in the default
     ``~/.mrsegmentator`` location (e.g. from local development) are moved
     into place instead of being re-downloaded.
+
+    Progress is shown in a small Tk window (see
+    ``_run_with_progress_window()``) rather than tqdm's usual console
+    output, which would be invisible here -- this step has no console at
+    all (Inno Setup's ``[Run]`` step launches it silently).
     """
+    import queue
     import shutil
 
     from mrsegmentator import config
@@ -454,19 +540,63 @@ def install_weights() -> int:
     os.environ[WEIGHTS_ENV_VAR] = str(target)
 
     default_root = Path.home() / ".mrsegmentator"
+    events: "queue.Queue[Any]" = queue.Queue()
 
-    for name, entry in config.MODEL_REGISTRY.items():
-        dest = target / name
-        source = default_root / name
-        if (not dest.is_dir() or not any(dest.iterdir())) and source.is_dir():
-            if config._read_model_version(source) >= entry["version"]:
-                print(f"[{name}] moving already-downloaded weights from {source}")
-                shutil.move(str(source), str(dest))
+    class _ProgressReporter:
+        """Stand-in for tqdm that reports into ``events`` instead of
+        printing. Only the members ``config._download_model()`` actually
+        touches (``total``, ``n``, ``update()``, context-manager protocol)
+        need to exist."""
 
-        print(f"[{name}] checking weights...")
-        config.setup_mrseg(name)
+        def __init__(self, *args: Any, total: Optional[int] = None, desc: str = "", **kwargs: Any):
+            self.total = total
+            self.n = 0
+            self.desc = desc
+            events.put(("start", desc, total))
 
-    print("\nWeights installation complete.")
+        def update(self, n: int = 1) -> None:
+            self.n += n
+            events.put(("progress", self.desc, self.n, self.total))
+
+        def close(self) -> None:
+            pass
+
+        def __enter__(self) -> "_ProgressReporter":
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            self.close()
+
+    # Frozen-build-only monkeypatch, same spirit as the nnU-Net class-lookup
+    # patch above: this process exits right after install_weights() returns,
+    # so there is nothing to restore it for.
+    config.tqdm = _ProgressReporter
+
+    errors: List[BaseException] = []
+
+    def worker() -> None:
+        try:
+            for name, entry in config.MODEL_REGISTRY.items():
+                dest = target / name
+                source = default_root / name
+                if (not dest.is_dir() or not any(dest.iterdir())) and source.is_dir():
+                    if config._read_model_version(source) >= entry["version"]:
+                        events.put(("status", f"Using already-downloaded {name} weights..."))
+                        shutil.move(str(source), str(dest))
+
+                events.put(("status", f"Checking {name} weights..."))
+                config.setup_mrseg(name)
+        except BaseException as caught:  # noqa: BLE001 - re-raised on the main thread below
+            errors.append(caught)
+        finally:
+            events.put(("finished", None))
+
+    _run_with_progress_window(events, worker)
+
+    if errors:
+        raise errors[0]
+
+    _debug("weights installation complete")
     return 0
 
 
