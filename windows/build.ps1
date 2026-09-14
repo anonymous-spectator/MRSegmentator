@@ -58,6 +58,9 @@ param(
     # recreated automatically (see below).
     [string]$VenvPath = '',
 
+    # A launcher command ("py -3.11"), a full path to python.exe, or just a
+    # bare version number ("3.11"), which is rewritten to the py launcher
+    # form automatically.
     [string]$Python = 'py -3.11'
 )
 
@@ -74,10 +77,22 @@ Write-Host "  installer  : $(if ($Installer) { 'yes (Inno Setup)' } else { 'no' 
 
 if (-not $VenvPath) { $VenvPath = Join-Path $repo 'build\windows\venv' }
 
+# A bare version number ("3.11", from e.g. -Python 3.11) is not itself a
+# runnable command -- rewrite it to the py launcher form so it works the way
+# it obviously was meant to.
+if ($Python -match '^\d+\.\d+$') { $Python = "py -$Python" }
+
 # -Python may be a launcher command ("py -3.11"), not a direct path, so
 # resolve it to the actual interpreter it runs -- that's what gets compared
 # below to decide whether an existing venv still matches what was asked for.
-$resolvedPython = (Invoke-Expression "$Python -c `"import sys; print(sys.executable)`"").Trim()
+try {
+    $resolvedPython = (Invoke-Expression "$Python -c `"import sys; print(sys.executable)`"" -ErrorAction Stop).Trim()
+} catch {
+    throw "Could not run '$Python' as a Python interpreter (-Python expects a command or path, e.g. 'py -3.11' or a full path to python.exe): $_"
+}
+if (-not $resolvedPython) {
+    throw "Could not run '$Python' as a Python interpreter (-Python expects a command or path, e.g. 'py -3.11' or a full path to python.exe)."
+}
 $pythonMarker = Join-Path $VenvPath '.mrseg-build-python'
 
 if (Test-Path $VenvPath) {
