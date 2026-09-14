@@ -376,6 +376,11 @@ def nuitka_command(
 
     if icon is not None:
         command.append(f"--windows-icon-from-ico={icon}")
+        # Also embed it as an ordinary data file (not just the .exe's PE
+        # resource) so mrseg_gui.py can set it as the actual window/taskbar
+        # icon at runtime via frozen_support.find_data_file("icon.ico") --
+        # Tk does not inherit the hosting exe's own icon automatically.
+        command.append(f"--include-data-files={icon}=icon.ico")
 
     if jobs:
         command.append(f"--jobs={jobs}")
@@ -448,6 +453,12 @@ def pyinstaller_command(
 
     if icon is not None:
         command.append(f"--icon={icon}")
+        # --icon only sets the .exe's own PE resource icon; also bundle it
+        # as an ordinary data file so mrseg_gui.py can set the actual
+        # window/taskbar icon at runtime (see the matching comment in
+        # nuitka_command()). icon is already staged under the fixed name
+        # "icon.ico" by normalize_icon(), so this lands at that same name.
+        command.append(f"--add-data={icon}{separator}.")
 
     if embedded_weights is not None:
         # See the matching comment in nuitka_command(): this bakes the

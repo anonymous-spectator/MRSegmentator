@@ -78,6 +78,29 @@ def _is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
 
 
+def _apply_window_icon(root: tk.Tk) -> None:
+    """Set the window/taskbar icon to the one built with ``--icon``, if any.
+
+    Tk does not inherit the hosting .exe's own PE icon resource for its
+    window decorations (that's a separate, Windows-only concept), so
+    build_windows_exe.py also bundles the same normalized icon as a plain
+    data file under the fixed name ``icon.ico`` -- all this needs is to find
+    that file and hand it to Tk. A no-op outside a frozen build (there is
+    nothing bundled to find) or if anything about this goes wrong -- a
+    missing custom icon is not worth failing the GUI over.
+    """
+    if not _is_frozen():
+        return
+    try:
+        import frozen_support
+
+        icon_path = frozen_support.find_data_file("icon.ico")
+        if icon_path is not None:
+            root.iconbitmap(str(icon_path))
+    except Exception:
+        pass
+
+
 def _cli_command(args: List[str]) -> List[str]:
     """Build the command line that re-invokes MRSegmentator's own CLI.
 
@@ -600,6 +623,7 @@ class MRSegGUI:
 
 def main() -> None:
     root = tk.Tk()
+    _apply_window_icon(root)
     MRSegGUI(root)
     root.mainloop()
 

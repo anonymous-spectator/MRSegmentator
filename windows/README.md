@@ -204,6 +204,13 @@ distorted, single-resolution `.ico` this step exists to fix. Needs Pillow
 input is copied through as-is (a warning is printed) and anything else
 fails outright.
 
+The same normalized icon is also bundled as a plain data file (fixed name
+`icon.ico`) and set as the actual window/taskbar icon at runtime by
+`mrseg_gui.py` -- the `.exe`'s own PE icon resource (what `--icon` sets)
+covers the taskbar/Explorer icon, but Tk does not inherit that for its own
+window decoration, so without this the GUI's title bar keeps Tk's default
+icon regardless of `--icon`.
+
 **Windows caches file icons.** If you rebuild with a different icon and
 Explorer still shows the old one on the `.exe`, that's the icon cache, not a
 build issue -- moving/renaming the file, or logging off and back on, forces
